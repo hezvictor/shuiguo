@@ -1,8 +1,51 @@
 <!DOCTYPE html>
 <html>
-<head><title>首页</title></head>
+<head>
+    <title>首页</title>
+    <meta charset="utf-8">
+</head>
 <body>
     <h2>欢迎, {{ user.username }}</h2>
     <a href="{% url 'login_app:login' %}">退出</a>
+    <hr>
+    <h3>水果分类测试</h3>
+    <form id="upload-form" enctype="multipart/form-data">
+        {% csrf_token %}
+        <input type="file" name="image" accept="image/*" required>
+        <button type="submit">上传并预测</button>
+    </form>
+    <div id="result" style="margin-top: 20px; padding: 10px; border: 1px solid #ccc;">
+        等待预测结果...
+    </div>
+
+    <script>
+        document.getElementById('upload-form').addEventListener('submit', function(e) {
+            e.preventDefault();
+            var formData = new FormData(this);
+            var csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+
+            fetch('/login/predict/', {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'X-CSRFToken': csrftoken,
+                },
+            })
+            .then(response => response.json())
+            .then(data => {
+                var resultDiv = document.getElementById('result');
+                if (data.predicted_class && data.confidence) {
+                    resultDiv.innerHTML = `<strong>预测结果：</strong> ${data.predicted_class}<br><strong>置信度：</strong> ${(data.confidence * 100).toFixed(2)}%`;
+                } else if (data.error) {
+                    resultDiv.innerHTML = `<strong>错误：</strong> ${data.error}`;
+                } else {
+                    resultDiv.innerHTML = '<strong>错误：</strong> 未知错误';
+                }
+            })
+            .catch(error => {
+                document.getElementById('result').innerHTML = `<strong>请求失败：</strong> ${error}`;
+            });
+        });
+    </script>
 </body>
 </html>
