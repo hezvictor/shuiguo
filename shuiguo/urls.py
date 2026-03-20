@@ -1,11 +1,18 @@
+# shuiguo/urls.py
 from django.contrib import admin
 from django.urls import path, include
 from django.shortcuts import redirect
-from .views import health_check   # 导入健康检查视图
+from django.conf import settings
+from django.conf.urls.static import static
+from .views import health_check
 
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('login/', include('login_app.urls')),
-    path('', lambda request: redirect('login_app:login')),  # 根路径重定向到登录页
-    path('api/health/', health_check, name='health_check'), # 健康检查接口
+    path('', lambda request: redirect('login_app:login')),
+    path('api/health/', health_check, name='health_check'),
 ]
+
+# 开发环境下提供媒体文件访问
+if settings.DEBUG:
+    urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

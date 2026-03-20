@@ -6,7 +6,7 @@ from torchvision import transforms
 import os
 from pathlib import Path
 from django.apps import AppConfig
-
+from ultralytics import YOLO
 # ==========================================
 # 模型结构定义（必须与训练时完全一致）
 # ==========================================
@@ -150,3 +150,5 @@ class LoginAppConfig(AppConfig):
         self.mango_model.to(self.device)
         self.banana_model.to(self.device)
         self.strawberry_model.to(self.device)
+        yolo_path = base_dir / 'model' / 'epoch90.pt'
+        self.yolo_model = YOLO(yolo_path)
