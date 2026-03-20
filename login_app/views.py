@@ -123,14 +123,8 @@ def predict_with_ripeness(request):
     fruit_confidence = probs[predicted_idx].item()
 
     # 2. 判断是否需要熟度检测
-    fruit_to_model = {
-        '芒果': ('mango', app_config.mango_model, app_config.mango_classes),
-        '香蕉': ('banana', app_config.banana_model, app_config.banana_classes),
-        '草莓': ('strawberry', app_config.strawberry_model, app_config.strawberry_classes),
-    }
-
-    if fruit_label in fruit_to_model:
-        fruit_key, model, classes = fruit_to_model[fruit_label]
+    model, classes = app_config.get_ripeness_info(fruit_label)
+    if model is not None:
         # 预处理并预测
         img_t_ripe = app_config.ripeness_preprocess(img)
         batch_t_ripe = torch.unsqueeze(img_t_ripe, 0).to(app_config.device)
@@ -312,19 +306,8 @@ def yolo_report(request):
             fruit_confidence = probs[predicted_idx].item()
 
             # 2. 熟度分析（仅支持芒果、香蕉、草莓）
+            model, classes = app_config.get_ripeness_info(fruit_label)
             ripeness_result = None
-            if fruit_label == '芒果':
-                model = app_config.mango_model
-                classes = app_config.mango_classes
-            elif fruit_label == '香蕉':
-                model = app_config.banana_model
-                classes = app_config.banana_classes
-            elif fruit_label == '草莓':
-                model = app_config.strawberry_model
-                classes = app_config.strawberry_classes
-            else:
-                model = None
-
             if model:
                 img_t_ripe = ripeness_preprocess(cropped_img)
                 batch_t_ripe = torch.unsqueeze(img_t_ripe, 0).to(device)

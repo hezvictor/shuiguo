@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 from django.apps import AppConfig
 from ultralytics import YOLO
+from django.conf import settings
+
 # ==========================================
 # 模型结构定义（必须与训练时完全一致）
 # ==========================================
@@ -82,73 +84,83 @@ class LoginAppConfig(AppConfig):
     name = 'login_app'
 
     def ready(self):
-        base_dir = Path(__file__).resolve().parent.parent
+        # 从配置中获取模型路径
+        model_base = settings.MODEL_CONFIG['BASE_DIR']
+        fruit_model_path = model_base / settings.MODEL_CONFIG['FRUIT_MODEL']
+        mango_path = model_base / settings.MODEL_CONFIG['MANGO_MODEL']
+        banana_path = model_base / settings.MODEL_CONFIG['BANANA_MODEL']
+        strawberry_path = model_base / settings.MODEL_CONFIG['STRAWBERRY_MODEL']
+        yolo_path = model_base / settings.MODEL_CONFIG['YOLO_MODEL']
+
+        # 水果类别列表
+        self.fruit_class_names = settings.MODEL_CONFIG['FRUIT_CLASS_NAMES']
 
         # ---------- 水果分类模型（EfficientNet） ----------
-        fruit_model_path = base_dir / 'model' / 'best_model_finetuned.pth'
-        # 加载模型架构
         import torchvision.models as models
         self.fruit_model = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.DEFAULT)
         num_ftrs = self.fruit_model.classifier[1].in_features
         self.fruit_model.classifier = nn.Sequential(
             nn.Dropout(p=0.5, inplace=True),
-            nn.Linear(num_ftrs, 50)
+            nn.Linear(num_ftrs, len(self.fruit_class_names))  # 输出类别数等于列表长度
         )
         self.fruit_model.load_state_dict(torch.load(fruit_model_path, map_location=torch.device('cpu')))
         self.fruit_model.eval()
 
-        # 水果类别列表
-        self.fruit_class_names = [
-            '苹果', '鳄梨', '香蕉', '甜菜根', '黑莓', '蓝莓', '西兰花', '卷心菜',
-            '辣椒', '胡萝卜', '花椰菜', '辣椒', '玉米', '黄瓜', '枣',
-            '火龙果', '茄子', '无花果', '大蒜', '生姜', '葡萄', '番石榴', '墨西哥辣椒',
-            '猕猴桃', '柠檬', '生菜', '芒果', '蘑菇', '秋葵', '橄榄', '洋葱', '橙子',
-            '辣椒粉', '花生', '梨', '豌豆', '菠萝', '石榴', '土豆', '南瓜',
-            '萝卜', '红毛丹', '大豆', '菠菜', '草莓', '甜玉米', '红薯',
-            '番茄', '芜菁', '西瓜'
-        ]
-
         # 水果分类预处理
+        fruit_prep = settings.MODEL_CONFIG['PREPROCESS']['FRUIT']
         self.fruit_preprocess = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
+            transforms.Resize(fruit_prep['RESIZE']),
+            transforms.CenterCrop(fruit_prep['CROP']),
             transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+            transforms.Normalize(mean=fruit_prep['MEAN'], std=fruit_prep['STD']),
         ])
 
         # ---------- 芒果熟度模型 ----------
-        mango_path = base_dir / 'model' / 'mango_mobilevit_plus.pth'
         self.mango_model = MobileViT_Plus(num_classes=2)
         self.mango_model.load_state_dict(torch.load(mango_path, map_location='cpu'))
         self.mango_model.eval()
-        self.mango_classes = ['Ripe (熟芒果 🥭)', 'Unripe (生芒果 🍏)']  # 索引0=熟,1=生
+        self.mango_classes = ['Ripe (熟芒果 🥭)', 'Unripe (生芒果 🍏)']
 
         # ---------- 香蕉熟度模型 ----------
-        banana_path = base_dir / 'model' / 'banana_mobilevit_plus.pth'
         self.banana_model = MobileViT_Plus(num_classes=2)
         self.banana_model.load_state_dict(torch.load(banana_path, map_location='cpu'))
         self.banana_model.eval()
         self.banana_classes = ['Ripe (熟香蕉)', 'Unripe (生香蕉)']
 
         # ---------- 草莓熟度模型 ----------
-        strawberry_path = base_dir / 'model' / 'strawberry_3class_mobilevit.pth'
         self.strawberry_model = MobileViT_Plus(num_classes=3)
         self.strawberry_model.load_state_dict(torch.load(strawberry_path, map_location='cpu'))
         self.strawberry_model.eval()
         self.strawberry_classes = ['Half Ripe (半熟 🍓偏白/粉)', 'Ripe (全熟 🍓红透)', 'Unripe (生果 🍏纯青)']
 
         # 通用预处理（熟度模型共用）
+        ripe_prep = settings.MODEL_CONFIG['PREPROCESS']['RIPENESS']
         self.ripeness_preprocess = transforms.Compose([
-            transforms.Resize((256, 256)),
+            transforms.Resize(ripe_prep['RESIZE']),
             transforms.ToTensor(),
-            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+            transforms.Normalize(mean=ripe_prep['MEAN'], std=ripe_prep['STD'])
         ])
 
-        # 将模型移动到设备（可自行添加GPU支持）
+        # 设备
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.fruit_model.to(self.device)
         self.mango_model.to(self.device)
         self.banana_model.to(self.device)
         self.strawberry_model.to(self.device)
-        yolo_path = base_dir / 'model' / 'epoch90.pt'
+
+        # YOLO模型
         self.yolo_model = YOLO(yolo_path)
+
+    def get_ripeness_info(self, fruit_name):
+        """
+        根据水果名称返回对应的熟度模型和类别列表。
+        参数 fruit_name: 水果名称（中文，如'芒果'）
+        返回: (model, classes) 或 (None, None) 如果不支持
+        """
+        supported = settings.MODEL_CONFIG['RIPENESS_SUPPORTED']
+        if fruit_name in supported:
+            info = supported[fruit_name]
+            model = getattr(self, info['model_attr'])
+            classes = getattr(self, info['classes_attr'])
+            return model, classes
+        return None, None

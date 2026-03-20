@@ -125,3 +125,47 @@ STATIC_URL = "static/"
 # 媒体文件配置（用于保存报告文件）
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+MODEL_CONFIG = {
+    # 模型文件夹基础路径 (相对于项目根目录)
+    'BASE_DIR': BASE_DIR / 'model',
+
+    # 模型文件名
+    'FRUIT_MODEL': 'best_model_finetuned.pth',
+    'MANGO_MODEL': 'mango_mobilevit_plus.pth',
+    'BANANA_MODEL': 'banana_mobilevit_plus.pth',
+    'STRAWBERRY_MODEL': 'strawberry_3class_mobilevit.pth',
+    'YOLO_MODEL': 'epoch90.pt',
+
+    # 水果分类类别列表
+    'FRUIT_CLASS_NAMES': [
+        '苹果', '鳄梨', '香蕉', '甜菜根', '黑莓', '蓝莓', '西兰花', '卷心菜',
+        '辣椒', '胡萝卜', '花椰菜', '辣椒', '玉米', '黄瓜', '枣',
+        '火龙果', '茄子', '无花果', '大蒜', '生姜', '葡萄', '番石榴', '墨西哥辣椒',
+        '猕猴桃', '柠檬', '生菜', '芒果', '蘑菇', '秋葵', '橄榄', '洋葱', '橙子',
+        '辣椒粉', '花生', '梨', '豌豆', '菠萝', '石榴', '土豆', '南瓜',
+        '萝卜', '红毛丹', '大豆', '菠菜', '草莓', '甜玉米', '红薯',
+        '番茄', '芜菁', '西瓜'
+    ],
+
+    # 预处理参数
+    'PREPROCESS': {
+        'FRUIT': {
+            'RESIZE': 256,
+            'CROP': 224,
+            'MEAN': [0.485, 0.456, 0.406],
+            'STD': [0.229, 0.224, 0.225],
+        },
+        'RIPENESS': {
+            'RESIZE': (256, 256),
+            'MEAN': [0.485, 0.456, 0.406],
+            'STD': [0.229, 0.224, 0.225],
+        },
+    },
+
+    # 支持熟度检测的水果及对应的模型属性名和类别属性名
+    'RIPENESS_SUPPORTED': {
+        '芒果': {'model_attr': 'mango_model', 'classes_attr': 'mango_classes'},
+        '香蕉': {'model_attr': 'banana_model', 'classes_attr': 'banana_classes'},
+        '草莓': {'model_attr': 'strawberry_model', 'classes_attr': 'strawberry_classes'},
+    },
+}
