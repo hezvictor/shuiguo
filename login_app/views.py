@@ -19,10 +19,16 @@ from django.shortcuts import redirect, render
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from rest_framework import status
-
+from rest_framework.permissions import IsAuthenticated
 from .forms import LoginForm
 from .serializers import ImageUploadSerializer, TypeUploadSerializer
 from django.apps import apps
+from django.contrib.auth.models import User
+from django.contrib.auth import authenticate, login
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from django.contrib.auth.decorators import login_required
 
 # 原有的登录视图
 def login_view(request):
@@ -42,6 +48,7 @@ def login_view(request):
     return render(request, 'login/login.html', {'form': form})
 
 
+@login_required
 def home_view(request):
     if request.user.is_authenticated:
         return render(request, 'login/home.html', {'user': request.user})
@@ -351,3 +358,89 @@ def yolo_report(request):
     }, status=status.HTTP_200_OK)
 
 
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def register_view(request):
+    """
+    用户注册接口
+    接收参数: username, password, email(可选)
+    """
+    username = request.data.get('username')
+    password = request.data.get('password')
+    email = request.data.get('email', '')
+
+    if not username or not password:
+        return Response({'status': 'error', 'error': '用户名和密码不能为空'}, status=400)
+
+    if User.objects.filter(username=username).exists():
+        return Response({'status': 'error', 'error': '用户名已存在'}, status=400)
+
+    try:
+        user = User.objects.create_user(username=username, password=password, email=email)
+        # 注册成功后自动登录
+        login(request, user)
+        return Response({'status': 'success', 'message': '注册成功'}, status=201)
+    except Exception as e:
+        return Response({'status': 'error', 'error': str(e)}, status=500)
+
+# 新增登录API
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def api_login_view(request):
+    """
+    用户登录接口（REST API）
+    接收参数: username, password
+    """
+    username = request.data.get('username')
+    password = request.data.get('password')
+
+    if not username or not password:
+        return Response({'status': 'error', 'error': '用户名和密码不能为空'}, status=400)
+
+    user = authenticate(request, username=username, password=password)
+    if user is not None:
+        login(request, user)
+        return Response({'status': 'success', 'message': '登录成功'})
+    else:
+        return Response({'status': 'error', 'error': '用户名或密码错误'}, status=401)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def update_profile(request):
+    user = request.user
+    first_name = request.data.get('first_name', '').strip()
+    email = request.data.get('email', '').strip()
+
+    if first_name:
+        user.first_name = first_name
+    if email:
+        user.email = email
+    user.save()
+    return Response({'status': 'success', 'message': '个人信息更新成功'})
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    user = request.user
+    old_password = request.data.get('old_password')
+    new_password = request.data.get('new_password')
+
+    if not old_password or not new_password:
+        return Response({'status': 'error', 'error': '旧密码和新密码不能为空'}, status=400)
+    if not user.check_password(old_password):
+        return Response({'status': 'error', 'error': '旧密码错误'}, status=400)
+    if len(new_password) < 6:
+        return Response({'status': 'error', 'error': '新密码长度至少6位'}, status=400)
+
+    user.set_password(new_password)
+    user.save()
+    # 修改密码后，使当前会话失效（需要重新登录）
+    return Response({'status': 'success', 'message': '密码修改成功，请重新登录'})
+
+# 退出登录视图（用于前端链接）
+from django.contrib.auth import logout
+from django.shortcuts import redirect
+
+def logout_view(request):
+    logout(request)
+    return redirect('login_app:login')
