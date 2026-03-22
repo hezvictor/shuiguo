@@ -8,8 +8,7 @@ from .views import health_check
 
 urlpatterns = [
     path('admin/', admin.site.urls),
-    path('login/', include('login_app.urls')),
-    path('', lambda request: redirect('login_app:login')),
+    path('', include('fruit_api.urls')),
     path('api/health/', health_check, name='health_check'),
 ]
 

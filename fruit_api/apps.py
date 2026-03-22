@@ -81,7 +81,7 @@ class MobileViT_Plus(nn.Module):
 
 class LoginAppConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
-    name = 'login_app'
+    name = 'fruit_api'
 
     def ready(self):
         # 从配置中获取模型路径

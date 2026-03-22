@@ -1,4 +1,4 @@
-# login_app/views.py
+# fruit_api/views.py
 import io
 import json
 import os
@@ -40,7 +40,7 @@ def login_view(request):
             user = authenticate(request, username=username, password=password)
             if user is not None:
                 login(request, user)
-                return redirect('login_app:home')
+                return redirect('fruit_api:home')
             else:
                 messages.error(request, '用户名或密码错误')
     else:
@@ -53,7 +53,7 @@ def home_view(request):
     if request.user.is_authenticated:
         return render(request, 'login/home.html', {'user': request.user})
     else:
-        return redirect('login_app:login')
+         return redirect('fruit_api:home')
 
 
 # 原有的水果分类预测视图
@@ -76,7 +76,7 @@ def predict_view(request):
         return Response({'error': '无效的图片文件'}, status=status.HTTP_400_BAD_REQUEST)
 
     # 从 app config 获取模型和预处理函数
-    app_config = apps.get_app_config('login_app')
+    app_config = apps.get_app_config('fruit_api')
     model = app_config.fruit_model
     preprocess = app_config.fruit_preprocess
     class_names = app_config.fruit_class_names
@@ -117,7 +117,7 @@ def predict_with_ripeness(request):
     except Exception:
         return Response({'error': '无效的图片文件'}, status=status.HTTP_400_BAD_REQUEST)
 
-    app_config = apps.get_app_config('login_app')
+    app_config = apps.get_app_config('fruit_api')
 
     # 1. 水果分类预测
     img_t = app_config.fruit_preprocess(img)
@@ -183,7 +183,7 @@ def predict_ripeness_by_type(request):
     except Exception:
         return Response({'error': '无效的图片文件'}, status=status.HTTP_400_BAD_REQUEST)
 
-    app_config = apps.get_app_config('login_app')
+    app_config = apps.get_app_config('fruit_api')
 
     # 根据类型选择模型
     type_map = {
@@ -237,7 +237,7 @@ def yolo_detect_with_boxes(request):
     except Exception:
         return Response({'error': '无效的图片文件'}, status=status.HTTP_400_BAD_REQUEST)
 
-    app_config = apps.get_app_config('login_app')
+    app_config = apps.get_app_config('fruit_api')
     yolo_model = app_config.yolo_model
 
     # 运行YOLO预测，save=False 不保存到文件，只返回结果
@@ -264,12 +264,11 @@ def yolo_detect_with_boxes(request):
     img_io.seek(0)
     return HttpResponse(img_io.read(), content_type='image/jpeg')
 
-
 @api_view(['POST'])
 @login_required
-def yolo_report(request):
+def yolo_detect_info(request):
     """
-    接口2：上传图片，YOLO检测目标，对每个目标裁剪、分类、熟度分析，生成报告并保存。
+    接口：上传图片，YOLO检测，返回目标列表（不含图片）。
     """
     serializer = ImageUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -281,7 +280,57 @@ def yolo_report(request):
     except Exception:
         return Response({'error': '无效的图片文件'}, status=status.HTTP_400_BAD_REQUEST)
 
-    app_config = apps.get_app_config('login_app')
+    app_config = apps.get_app_config('fruit_api')
+    yolo_model = app_config.yolo_model
+
+    results = yolo_model.predict(source=img, conf=0.25, save=False)
+    result = results[0]
+    boxes = result.boxes
+
+    targets = []
+    if boxes is not None and len(boxes) > 0:
+        for box in boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+            conf = box.conf[0].item()
+            cls = int(box.cls[0].item())
+            label = result.names[cls]
+            targets.append({
+                'bbox': [x1, y1, x2, y2],
+                'label': label,
+                'confidence': conf
+            })
+
+    return Response({
+        'status': 'success',
+        'targets': targets,
+        'image_width': img.width,
+        'image_height': img.height
+    }, status=status.HTTP_200_OK)
+@api_view(['POST'])
+@login_required
+def yolo_report(request):
+    serializer = ImageUploadSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    image_file = serializer.validated_data['image']
+    # 获取选中的目标索引（JSON 字符串）
+    selected_indices = request.data.get('selected_indices')
+    if selected_indices:
+        try:
+            selected_indices = json.loads(selected_indices)   # 解析 JSON 列表
+            if not isinstance(selected_indices, list):
+                raise ValueError
+            selected_indices = [int(i) for i in selected_indices]
+        except:
+            return Response({'error': 'selected_indices 格式错误'}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        img = Image.open(image_file).convert('RGB')
+    except Exception:
+        return Response({'error': '无效的图片文件'}, status=status.HTTP_400_BAD_REQUEST)
+
+    app_config = apps.get_app_config('fruit_api')
     yolo_model = app_config.yolo_model
     fruit_model = app_config.fruit_model
     fruit_preprocess = app_config.fruit_preprocess
@@ -289,20 +338,23 @@ def yolo_report(request):
     ripeness_preprocess = app_config.ripeness_preprocess
     device = app_config.device
 
-    # YOLO检测
+    # YOLO 检测
     results = yolo_model.predict(source=img, conf=0.25, save=False)
     result = results[0]
     boxes = result.boxes
 
-    targets = []  # 存储每个目标的信息
-
+    targets = []
     if boxes is not None and len(boxes) > 0:
         for i, box in enumerate(boxes):
+            # 如果提供了 selected_indices，则只处理选中的目标
+            if selected_indices is not None and i not in selected_indices:
+                continue
+
             # 裁剪目标区域
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             cropped_img = img.crop((x1, y1, x2, y2))
 
-            # 1. 水果分类（使用EfficientNet模型）
+            # 1. 水果分类
             img_t = fruit_preprocess(cropped_img)
             batch_t = torch.unsqueeze(img_t, 0).to(device)
             with torch.no_grad():
@@ -343,7 +395,7 @@ def yolo_report(request):
         'targets': targets
     }
 
-    # 保存报告文件到 media/reports 目录
+    # 保存报告文件（可选）
     report_dir = os.path.join(settings.MEDIA_ROOT, 'reports')
     os.makedirs(report_dir, exist_ok=True)
     report_filename = f'report_{uuid.uuid4().hex}.json'
@@ -357,7 +409,7 @@ def yolo_report(request):
         'report_file': os.path.join(settings.MEDIA_URL, 'reports', report_filename)
     }, status=status.HTTP_200_OK)
 
-
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_view(request):
@@ -384,6 +436,7 @@ def register_view(request):
         return Response({'status': 'error', 'error': str(e)}, status=500)
 
 # 新增登录API
+@csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def api_login_view(request):
@@ -403,6 +456,13 @@ def api_login_view(request):
         return Response({'status': 'success', 'message': '登录成功'})
     else:
         return Response({'status': 'error', 'error': '用户名或密码错误'}, status=401)
+
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def api_logout_view(request):
+    from django.contrib.auth import logout
+    logout(request)
+    return Response({'status': 'success', 'message': '已退出登录'})
 
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
@@ -443,4 +503,16 @@ from django.shortcuts import redirect
 
 def logout_view(request):
     logout(request)
-    return redirect('login_app:login')
+    return redirect('fruit_api:home')
+
+@api_view(['GET'])
+@login_required
+def get_user_info(request):
+    user = request.user
+    return Response({
+        'id': user.id,
+        'username': user.username,
+        'first_name': user.first_name,
+        'email': user.email,
+        # 如果需要更多字段，可以扩展 User 模型
+    })
