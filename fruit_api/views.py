@@ -408,15 +408,10 @@ def yolo_report(request):
         'report': report_data,
         'report_file': os.path.join(settings.MEDIA_URL, 'reports', report_filename)
     }, status=status.HTTP_200_OK)
-
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def register_view(request):
-    """
-    用户注册接口
-    接收参数: username, password, email(可选)
-    """
     username = request.data.get('username')
     password = request.data.get('password')
     email = request.data.get('email', '')
@@ -429,21 +424,24 @@ def register_view(request):
 
     try:
         user = User.objects.create_user(username=username, password=password, email=email)
-        # 注册成功后自动登录
-        login(request, user)
-        return Response({'status': 'success', 'message': '注册成功'}, status=201)
+        login(request, user)  # 自动登录
+        return Response({
+            'status': 'success',
+            'message': '注册成功',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'first_name': user.first_name,
+                'email': user.email,
+            }
+        }, status=201)
     except Exception as e:
         return Response({'status': 'error', 'error': str(e)}, status=500)
-
 # 新增登录API
 @csrf_exempt
 @api_view(['POST'])
 @permission_classes([AllowAny])
 def api_login_view(request):
-    """
-    用户登录接口（REST API）
-    接收参数: username, password
-    """
     username = request.data.get('username')
     password = request.data.get('password')
 
@@ -453,10 +451,19 @@ def api_login_view(request):
     user = authenticate(request, username=username, password=password)
     if user is not None:
         login(request, user)
-        return Response({'status': 'success', 'message': '登录成功'})
+        # 返回用户信息，供前端直接存储
+        return Response({
+            'status': 'success',
+            'message': '登录成功',
+            'user': {
+                'id': user.id,
+                'username': user.username,
+                'first_name': user.first_name,
+                'email': user.email,
+            }
+        })
     else:
         return Response({'status': 'error', 'error': '用户名或密码错误'}, status=401)
-
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def api_logout_view(request):

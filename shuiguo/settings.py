@@ -169,3 +169,8 @@ MODEL_CONFIG = {
         '草莓': {'model_attr': 'strawberry_model', 'classes_attr': 'strawberry_classes'},
     },
 }
+
+CSRF_TRUSTED_ORIGINS = [
+    'http://localhost:5173',   # 前端开发服务器地址
+    # 如果有其他前端地址（如生产环境），也一并加入
+]

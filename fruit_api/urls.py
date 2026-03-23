@@ -11,7 +11,7 @@ urlpatterns = [
     path('logout/', views.logout_view, name='logout'),
 
     # ---------- API 接口（正式接口）----------
-    path('api/v1/', include([
+    path('api/', include([
         # 用户相关
         path('register/', views.register_view, name='api_register'),
         path('login/', views.api_login_view, name='api_login'),
@@ -29,5 +29,6 @@ urlpatterns = [
         path('yolo_detect/', views.yolo_detect_with_boxes, name='yolo_detect'),        # 返回带框图片
         path('yolo_detect_info/', views.yolo_detect_info, name='yolo_detect_info'),    # 返回目标信息
         path('yolo_report/', views.yolo_report, name='yolo_report'),                   # 生成报告
+        path('yolo_detect_with_boxes/', views.yolo_detect_with_boxes, name='yolo_detect_with_boxes'),
     ])),
 ]
