@@ -30,5 +30,12 @@ urlpatterns = [
         path('yolo_detect_info/', views.yolo_detect_info, name='yolo_detect_info'),    # 返回目标信息
         path('yolo_report/', views.yolo_report, name='yolo_report'),                   # 生成报告
         path('yolo_detect_with_boxes/', views.yolo_detect_with_boxes, name='yolo_detect_with_boxes'),
+
+
+        path('video/upload/', views.video_upload, name='video_upload'),
+        path('video/progress/<str:task_id>/', views.video_progress, name='video_progress'),
+        path('video/download/<str:task_id>/', views.video_download, name='video_download'),
+        path('video/cleanup/<str:task_id>/', views.video_cleanup, name='video_cleanup'),
+        path('video/report/<str:task_id>/', views.video_report, name='video_report'),
     ])),
 ]
