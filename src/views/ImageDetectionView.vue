@@ -50,61 +50,58 @@
       </div>
 
       <!-- 图片展示区域 -->
-      <div v-if="selectedFile || processedImageUrl" class="image-section">
+      <div v-if="selectedFile" class="image-section">
         <div class="image-comparison">
-          <!-- 原图 -->
-          <div class="image-container">
-            <h3>原图</h3>
-            <div class="image-wrapper">
-              <img
-                v-if="selectedFile"
-                :src="originalImageUrl"
-                alt="原图"
-                class="preview-image"
-              />
-              <div v-else class="no-image">未选择图片</div>
+          <!-- 原图 + Canvas 绘制区域 -->
+          <div class="image-container canvas-container">
+            <h3>检测结果 <span v-if="selectedTargets.length > 0" class="highlight-badge">已选中 {{ selectedTargets.length }} 个目标</span></h3>
+            <div class="image-wrapper canvas-wrapper">
+              <canvas
+                ref="resultCanvas"
+                class="result-canvas"
+                :style="{ width: canvasWidth + 'px', height: canvasHeight + 'px' }"
+              ></canvas>
+              <div v-if="!targetsList.length && !isProcessing" class="no-image">等待检测结果</div>
+              <div v-if="isProcessing" class="processing-overlay">
+                <div class="spinner"></div>
+                <span>检测中...</span>
+              </div>
             </div>
-            <div v-if="selectedFile" class="image-info">
-              尺寸: {{ imageInfo.original.width }} x {{ imageInfo.original.height }}
-            </div>
-          </div>
-
-          <!-- 检测结果图片（带框） -->
-          <div class="image-container">
-            <h3>检测结果</h3>
-            <div class="image-wrapper">
-              <img
-                v-if="processedImageUrl"
-                :src="processedImageUrl"
-                alt="检测结果"
-                class="preview-image"
-              />
-              <div v-else class="no-image">等待检测结果</div>
-            </div>
-            <div v-if="processedImageUrl" class="image-info">
-              处理时间: {{ processingTime }}ms
+            <div v-if="targetsList.length > 0" class="image-info">
+              共检测到 {{ targetsList.length }} 个目标 | 处理时间: {{ processingTime }}ms
             </div>
           </div>
         </div>
 
-        <!-- 目标列表（带复选框） -->
+        <!-- 目标列表（带复选框，点击时高亮对应框） -->
         <div v-if="targetsList.length > 0" class="targets-section">
           <div class="targets-header">
             <h3>检测到的目标</h3>
             <div class="select-all">
-              <input type="checkbox" id="selectAll" v-model="selectAll" />
-              <label for="selectAll">全选</label>
+              <input type="checkbox" id="selectAll" v-model="selectAll" @change="onSelectAllChange" />
+              <label for="selectAll">全选 ({{ targetsList.length }})</label>
             </div>
           </div>
           <div class="targets-list">
-            <div v-for="(target, idx) in targetsList" :key="idx" class="target-item">
+            <div
+              v-for="(target, idx) in targetsList"
+              :key="idx"
+              class="target-item"
+              :class="{ 'target-selected': selectedTargets.includes(idx) }"
+              @click="toggleTargetSelection(idx)"
+            >
               <input
                 type="checkbox"
                 :value="idx"
-                v-model="selectedIndices"
+                v-model="selectedTargets"
+                @click.stop
+                @change="onTargetSelectionChange"
                 class="target-checkbox"
               />
-              <span class="target-label">{{ target.label }} ({{ (target.confidence * 100).toFixed(1) }}%)</span>
+              <span class="target-label">
+                {{ target.label }}
+                <span class="confidence-badge">{{ (target.confidence * 100).toFixed(1) }}%</span>
+              </span>
               <span class="target-bbox">框: [{{ target.bbox.join(',') }}]</span>
             </div>
           </div>
@@ -112,9 +109,9 @@
             <button
               @click="generateReport"
               class="btn btn-primary"
-              :disabled="isGeneratingReport || selectedIndices.length === 0"
+              :disabled="isGeneratingReport || selectedTargets.length === 0"
             >
-              {{ isGeneratingReport ? '生成中...' : '生成报告' }}
+              {{ isGeneratingReport ? '生成中...' : `生成报告 (${selectedTargets.length}个目标)` }}
             </button>
           </div>
         </div>
@@ -164,7 +161,8 @@
         <ul>
           <li>点击"选择图片"按钮或拖拽图片到上传区域</li>
           <li>支持 JPG、PNG 格式的图片文件，大小建议不超过 5MB</li>
-          <li>点击"开始检测"进行目标检测，显示带框图片和目标列表</li>
+          <li>点击"开始检测"进行目标检测，图片上会显示检测框</li>
+          <li><strong>点击左侧目标列表或勾选复选框，对应的检测框会高亮显示（蓝色边框）</strong></li>
           <li>勾选需要分析的目标，点击"生成报告"获取详细的水果分类和成熟度信息</li>
           <li>报告生成后可以下载为 HTML 文件保存</li>
         </ul>
@@ -174,7 +172,7 @@
 </template>
 
 <script>
-import { detectImage, detectImageWithBoxes, generateReport } from '@/api/detection'
+import { detectImage, generateReport } from '@/api/detection'
 
 export default {
   name: 'ImageDetection',
@@ -182,38 +180,26 @@ export default {
     return {
       selectedFile: null,
       originalImageUrl: null,
-      processedImageUrl: null,
+      originalImage: null,      // 存储原始 Image 对象，用于 Canvas 绘制
       targetsList: [],           // 从 detectImage 获取的目标列表
-      selectedIndices: [],       // 选中的目标索引
+      selectedTargets: [],       // 选中的目标索引
       selectAll: false,          // 全选状态
       isProcessing: false,
       isGeneratingReport: false,
       processingTime: 0,
       errorMessage: '',
       dragOver: false,
-      imageInfo: {
-        original: { width: 0, height: 0 }
-      },
-      reportData: null            // 存储生成的报告数据
+      canvasWidth: 0,
+      canvasHeight: 0,
+      reportData: null,          // 存储生成的报告数据
+      canvasContext: null
     }
   },
   watch: {
-    // 监听全选状态变化
-    selectAll(val) {
-      if (val) {
-        this.selectedIndices = this.targetsList.map((_, idx) => idx)
-      } else {
-        this.selectedIndices = []
-      }
-    },
-    // 当手动勾选时，同步全选状态
-    selectedIndices: {
-      handler(val) {
-        if (val.length === this.targetsList.length && this.targetsList.length > 0) {
-          this.selectAll = true
-        } else {
-          this.selectAll = false
-        }
+    // 监听选中的目标变化，重新绘制 Canvas 高亮
+    selectedTargets: {
+      handler() {
+        this.redrawCanvasWithHighlights()
       },
       deep: true
     }
@@ -250,9 +236,8 @@ export default {
       }
 
       this.selectedFile = file
-      this.processedImageUrl = null
       this.targetsList = []
-      this.selectedIndices = []
+      this.selectedTargets = []
       this.reportData = null
       this.errorMessage = ''
 
@@ -260,13 +245,116 @@ export default {
       if (this.originalImageUrl) URL.revokeObjectURL(this.originalImageUrl)
       this.originalImageUrl = URL.createObjectURL(file)
 
-      // 获取图片尺寸
+      // 加载原始图片到 Image 对象，用于 Canvas 绘制
       const img = new Image()
       img.onload = () => {
-        this.imageInfo.original.width = img.width
-        this.imageInfo.original.height = img.height
+        this.originalImage = img
+        this.canvasWidth = img.width
+        this.canvasHeight = img.height
+        
+        // 初始化 Canvas
+        this.initCanvas()
+        
+        // 如果有检测结果，重新绘制
+        if (this.targetsList.length > 0) {
+          this.redrawCanvasWithHighlights()
+        }
       }
       img.src = this.originalImageUrl
+    },
+
+    initCanvas() {
+      const canvas = this.$refs.resultCanvas
+      if (canvas && this.originalImage) {
+        canvas.width = this.originalImage.width
+        canvas.height = this.originalImage.height
+        this.canvasContext = canvas.getContext('2d')
+        
+        // 绘制原始图片
+        this.canvasContext.drawImage(this.originalImage, 0, 0)
+      }
+    },
+
+    // 绘制所有检测框，并根据选中的索引高亮
+    redrawCanvasWithHighlights() {
+      const canvas = this.$refs.resultCanvas
+      const ctx = this.canvasContext
+      
+      if (!canvas || !ctx || !this.originalImage) return
+      
+      // 清除画布并重新绘制原始图片
+      ctx.clearRect(0, 0, canvas.width, canvas.height)
+      ctx.drawImage(this.originalImage, 0, 0)
+      
+      // 绘制所有检测框
+      this.targetsList.forEach((target, idx) => {
+        const [x1, y1, x2, y2] = target.bbox
+        const isSelected = this.selectedTargets.includes(idx)
+        
+        // 根据是否选中设置不同样式
+        if (isSelected) {
+          // 选中的框：蓝色，更粗边框，带发光效果
+          ctx.strokeStyle = '#3b82f6'
+          ctx.lineWidth = 4
+          ctx.shadowBlur = 8
+          ctx.shadowColor = '#3b82f6'
+        } else {
+          // 未选中的框：红色，正常边框
+          ctx.strokeStyle = '#ef4444'
+          ctx.lineWidth = 2
+          ctx.shadowBlur = 0
+        }
+        
+        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
+        
+        // 绘制标签背景
+        const label = `${target.label} ${(target.confidence * 100).toFixed(1)}%`
+        ctx.font = 'bold 14px "Inter", "Segoe UI", Arial'
+        const textWidth = ctx.measureText(label).width
+        const textHeight = 20
+        const padding = 4
+        
+        // 标签背景
+        ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.85)' : 'rgba(239, 68, 68, 0.85)'
+        ctx.fillRect(x1, y1 - textHeight - padding, textWidth + padding * 2, textHeight + padding)
+        
+        // 标签文字
+        ctx.fillStyle = '#ffffff'
+        ctx.fillText(label, x1 + padding, y1 - padding)
+      })
+      
+      // 重置阴影
+      ctx.shadowBlur = 0
+    },
+
+    // 切换目标选择（点击整行）
+    toggleTargetSelection(idx) {
+      const index = this.selectedTargets.indexOf(idx)
+      if (index === -1) {
+        this.selectedTargets.push(idx)
+      } else {
+        this.selectedTargets.splice(index, 1)
+      }
+      this.updateSelectAllState()
+    },
+
+    // 复选框变化时调用
+    onTargetSelectionChange() {
+      this.updateSelectAllState()
+    },
+
+    // 全选变化
+    onSelectAllChange() {
+      if (this.selectAll) {
+        this.selectedTargets = this.targetsList.map((_, idx) => idx)
+      } else {
+        this.selectedTargets = []
+      }
+    },
+
+    // 更新全选状态
+    updateSelectAllState() {
+      this.selectAll = this.selectedTargets.length === this.targetsList.length && this.targetsList.length > 0
     },
 
     // 开始检测
@@ -279,9 +367,8 @@ export default {
       this.isProcessing = true
       this.errorMessage = ''
       this.targetsList = []
-      this.selectedIndices = []
+      this.selectedTargets = []
       this.reportData = null
-      this.processedImageUrl = null
 
       const formData = new FormData()
       formData.append('image', this.selectedFile)
@@ -289,21 +376,10 @@ export default {
       try {
         const startTime = Date.now()
 
-        // 并行调用两个接口
-        const [boxResult, infoResult] = await Promise.all([
-          detectImageWithBoxes(formData),
-          detectImage(formData)
-        ])
+        // 调用检测接口获取目标信息（不获取带框图片）
+        const infoResult = await detectImage(formData)
 
         this.processingTime = Date.now() - startTime
-
-        // 处理带框图片
-        if (boxResult instanceof Blob) {
-          if (this.processedImageUrl) URL.revokeObjectURL(this.processedImageUrl)
-          this.processedImageUrl = URL.createObjectURL(boxResult)
-        } else {
-          throw new Error('获取带框图片失败')
-        }
 
         // 处理目标列表
         if (infoResult.status === 'success') {
@@ -312,12 +388,22 @@ export default {
             label: target.label,
             confidence: target.confidence
           }))
+          
+          // 绘制检测框（初始时全部未选中）
+          if (this.originalImage) {
+            this.redrawCanvasWithHighlights()
+          }
         } else {
           throw new Error(infoResult.error || '目标检测失败')
         }
       } catch (error) {
         console.error('图片检测失败:', error)
         this.errorMessage = error.message || '检测失败，请稍后重试'
+        // 清空画布
+        const canvas = this.$refs.resultCanvas
+        if (canvas && this.canvasContext && this.originalImage) {
+          this.canvasContext.drawImage(this.originalImage, 0, 0)
+        }
       } finally {
         this.isProcessing = false
       }
@@ -325,7 +411,7 @@ export default {
 
     // 生成报告
     async generateReport() {
-      if (this.selectedIndices.length === 0) {
+      if (this.selectedTargets.length === 0) {
         this.errorMessage = '请至少选择一个目标'
         return
       }
@@ -336,7 +422,7 @@ export default {
 
       const formData = new FormData()
       formData.append('image', this.selectedFile)
-      formData.append('selected_indices', JSON.stringify(this.selectedIndices))
+      formData.append('selected_indices', JSON.stringify(this.selectedTargets))
 
       try {
         const res = await generateReport(formData)
@@ -451,26 +537,31 @@ export default {
     clearAll() {
       this.selectedFile = null
       if (this.originalImageUrl) URL.revokeObjectURL(this.originalImageUrl)
-      if (this.processedImageUrl) URL.revokeObjectURL(this.processedImageUrl)
       this.originalImageUrl = null
-      this.processedImageUrl = null
+      this.originalImage = null
       this.targetsList = []
-      this.selectedIndices = []
+      this.selectedTargets = []
       this.reportData = null
       this.errorMessage = ''
       this.processingTime = 0
+      this.canvasWidth = 0
+      this.canvasHeight = 0
       if (this.$refs.fileInput) this.$refs.fileInput.value = ''
+      
+      // 清空 Canvas
+      const canvas = this.$refs.resultCanvas
+      if (canvas && this.canvasContext) {
+        this.canvasContext.clearRect(0, 0, canvas.width, canvas.height)
+      }
     }
   },
   beforeUnmount() {
     if (this.originalImageUrl) URL.revokeObjectURL(this.originalImageUrl)
-    if (this.processedImageUrl) URL.revokeObjectURL(this.processedImageUrl)
   }
 }
 </script>
 
 <style scoped>
-/* 样式与原有保持一致，仅补充少量新样式 */
 .image-detection {
   padding: 20px;
   font-family: 'Arial', 'Microsoft YaHei', sans-serif;
@@ -572,9 +663,6 @@ h1 {
   margin-bottom: 30px;
 }
 .image-comparison {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 30px;
   margin-bottom: 30px;
 }
 .image-container {
@@ -590,8 +678,16 @@ h1 {
   text-align: center;
   font-size: 1.3em;
 }
+.highlight-badge {
+  font-size: 12px;
+  background: #3b82f6;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 20px;
+  margin-left: 10px;
+}
 .image-wrapper {
-  background: white;
+  background: #1a1a2e;
   border-radius: 6px;
   padding: 10px;
   border: 1px solid #dee2e6;
@@ -599,17 +695,50 @@ h1 {
   display: flex;
   align-items: center;
   justify-content: center;
+  position: relative;
 }
-.preview-image {
+.canvas-wrapper {
+  padding: 0;
+  background: #f0f0f0;
+}
+.result-canvas {
   max-width: 100%;
-  max-height: 400px;
+  height: auto;
   border-radius: 4px;
+  display: block;
+  margin: 0 auto;
 }
 .no-image {
   color: #6c757d;
   font-style: italic;
   text-align: center;
   padding: 40px;
+}
+.processing-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  gap: 12px;
+  border-radius: 6px;
+}
+.spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 .image-info {
   margin-top: 10px;
@@ -647,13 +776,25 @@ h1 {
 }
 .target-item {
   background: white;
-  padding: 10px 15px;
-  border-radius: 6px;
+  padding: 12px 15px;
+  border-radius: 8px;
   border: 1px solid #e9ecef;
   display: flex;
   align-items: center;
   gap: 15px;
   flex-wrap: wrap;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.target-item:hover {
+  background: #f8f9fa;
+  border-color: #3b82f6;
+  transform: translateX(2px);
+}
+.target-item.target-selected {
+  background: #eef2ff;
+  border-color: #3b82f6;
+  border-left: 4px solid #3b82f6;
 }
 .target-checkbox {
   width: 18px;
@@ -663,6 +804,17 @@ h1 {
 .target-label {
   font-weight: 500;
   color: #2c3e50;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.confidence-badge {
+  background: #e9ecef;
+  padding: 2px 8px;
+  border-radius: 20px;
+  font-size: 12px;
+  font-weight: normal;
+  color: #495057;
 }
 .target-bbox {
   font-size: 12px;
@@ -741,10 +893,6 @@ h1 {
   line-height: 1.5;
 }
 @media (max-width: 768px) {
-  .image-comparison {
-    grid-template-columns: 1fr;
-    gap: 20px;
-  }
   .upload-controls {
     flex-direction: column;
     align-items: center;

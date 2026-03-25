@@ -1,8 +1,9 @@
+// src/api/detection.js
 import request from '@/utils/request'
 
 export function detectImage(formData) {
   return request({
-    url: '/api/yolo_detect_info/',    // 原为 '/login/yolo_detect_info/'
+    url: '/api/yolo_detect_info/',
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -12,7 +13,7 @@ export function detectImage(formData) {
 
 export function detectImageWithBoxes(formData) {
   return request({
-    url: '/api/yolo_detect_with_boxes/',   // 原为 '/login/yolo_detect_with_boxes/'
+    url: '/api/yolo_detect_with_boxes/',
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -23,7 +24,7 @@ export function detectImageWithBoxes(formData) {
 
 export function generateReport(formData) {
   return request({
-    url: '/api/yolo_report/',        // 原为 '/login/yolo_report/'
+    url: '/api/yolo_report/',
     method: 'post',
     data: formData,
     headers: { 'Content-Type': 'multipart/form-data' },
@@ -31,12 +32,38 @@ export function generateReport(formData) {
   })
 }
 
-// 视频检测接口（暂留，但后端未实现）
+// 视频检测相关 API
 export function uploadVideo(formData) {
   return request({
-    url: '/api/video/upload',
+    url: '/api/video/upload/',
     method: 'post',
     data: formData,
-    headers: { 'Content-Type': 'multipart/form-data' }
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 60000 // 上传视频可能需要更长时间
+  })
+}
+
+export function getVideoProgress(taskId) {
+  return request({
+    url: `/api/video/progress/${taskId}/`,
+    method: 'get',
+    timeout: 10000
+  })
+}
+
+export function downloadVideo(taskId) {
+  return request({
+    url: `/api/video/download/${taskId}/`,
+    method: 'get',
+    responseType: 'blob',
+    timeout: 120000
+  })
+}
+
+export function cleanupVideoTask(taskId) {
+  return request({
+    url: `/api/video/cleanup/${taskId}/`,
+    method: 'delete',
+    timeout: 10000
   })
 }

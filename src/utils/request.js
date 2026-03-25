@@ -44,8 +44,13 @@ request.interceptors.request.use(config => {
   return Promise.reject(error)
 })
 
+// src/utils/request.js
 request.interceptors.response.use(
   response => {
+    // 如果响应类型是 blob，直接返回
+    if (response.config.responseType === 'blob') {
+      return response.data
+    }
     let res = response.data;
     if (response.headers['content-type'] && response.headers['content-type'].includes('image')) {
       return res;
@@ -54,7 +59,9 @@ request.interceptors.response.use(
       res = res ? JSON.parse(res) : res
     }
     return res
-  }, error => {
+  },
+  error => {
+    // 错误处理保持不变
     if (error.response && error.response.status === 401) {
       import('@/utils/auth').then(({ removeToken, removeUserId, removeUserName }) => {
         removeToken()
