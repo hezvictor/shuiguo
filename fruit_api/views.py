@@ -564,6 +564,11 @@ def process_video_task(task_id):
     task = video_tasks.get(task_id)
     if not task:
         return
+    from PIL import ImageFont, ImageDraw
+
+    # 加载中文字体
+    font_path = os.path.join(settings.BASE_DIR, 'fonts', 'SimHei.ttf')
+    font = ImageFont.truetype(font_path, 20)  # 字号可根据需要调整
 
     app_config = apps.get_app_config('fruit_api')
     yolo_model = app_config.yolo_model
@@ -592,7 +597,7 @@ def process_video_task(task_id):
         sample_interval = 1
 
     # 准备视频写入器
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
     out = cv2.VideoWriter(str(task.output_path), fourcc, task.frame_rate,
                           (task.video_width, task.video_height))
     frame_count = 0
@@ -620,6 +625,7 @@ def process_video_task(task_id):
                 # 将 OpenCV 帧 (BGR) 转为 PIL Image (RGB)
                 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(frame_rgb)
+                draw = ImageDraw.Draw(pil_img)
 
                 # YOLO 检测
                 results = yolo_model.predict(source=pil_img, conf=0.25, save=False)
@@ -668,19 +674,23 @@ def process_video_task(task_id):
                                 ripeness_counts[fruit_label] = {}
                             ripeness_counts[fruit_label][ripeness_label] = ripeness_counts[fruit_label].get(ripeness_label, 0) + 1
 
-                        # 在帧上绘制信息
-                        display_text = f"{label} {conf:.2f}"
-                        if fruit_label:
-                            display_text += f" | {fruit_label} {fruit_conf:.2f}"
-                        if ripeness_label:
-                            display_text += f" | {ripeness_label} {ripeness_conf:.2f}"
+                        # 准备显示的文本
+                        display_text = f"{fruit_label} {fruit_conf:.2f}"
+                        # 获取文本的边界框（宽、高）
+                        bbox = draw.textbbox((0, 0), display_text, font=font)
+                        text_w = bbox[2] - bbox[0]
+                        text_h = bbox[3] - bbox[1]
 
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                        # 背景
-                        (text_w, text_h), _ = cv2.getTextSize(display_text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-                        cv2.rectangle(frame, (x1, y1 - text_h - 5), (x1 + text_w, y1), (0, 255, 0), -1)
-                        cv2.putText(frame, display_text, (x1, y1 - 5),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+                        # 绘制矩形框（边框绿色，线宽2）
+                        draw.rectangle([x1, y1, x2, y2], outline=(0, 255, 0), width=2)
+
+                        # 绘制文本背景矩形（填充绿色）
+                        draw.rectangle([x1, y1 - text_h - 5, x1 + text_w, y1 - 5], fill=(0, 255, 0))
+                        # 绘制文本（黑色）
+                        draw.text((x1, y1 - text_h - 5), display_text, fill=(0, 0, 0), font=font)
+
+                # 将 PIL Image 转回 OpenCV BGR 格式
+                frame = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
             # 写入帧（无论是否处理，都写入以保持视频长度）
             out.write(frame)
