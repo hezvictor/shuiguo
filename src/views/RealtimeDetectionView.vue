@@ -1,769 +1,700 @@
 <template>
-  <div class="fruit-recognition">
+  <div class="realtime-detection">
     <div class="container">
-      <h1>水果实时识别系统</h1>
-      
-      <div class="video-container">
-        <!-- 显示视频元素，不隐藏 -->
+      <h1>🍎 实时水果识别系统</h1>
+
+      <!-- 摄像头画面 -->
+      <div class="video-wrapper">
         <video ref="videoElement" class="video-preview" autoplay playsinline muted></video>
-        <canvas ref="canvasElement" class="video-canvas"></canvas>
+        <canvas ref="canvasElement" class="overlay-canvas"></canvas>
       </div>
 
+      <!-- 控制栏 -->
       <div class="controls">
-        <button 
-          @click="startCamera" 
-          :disabled="isStreaming" 
-          class="btn btn-primary"
+        <el-button
+          type="primary"
+          @click="startCamera"
+          :disabled="isStreaming"
+          :loading="cameraLoading"
         >
-          开启摄像头
-        </button>
-        <button 
-          @click="stopCamera" 
-          :disabled="!isStreaming" 
-          class="btn btn-secondary"
+          <el-icon><Camera /></el-icon> 开启摄像头
+        </el-button>
+        <el-button
+          type="danger"
+          @click="stopCamera"
+          :disabled="!isStreaming"
         >
-          关闭摄像头
-        </button>
-        <button 
-          @click="toggleProcessing" 
-          :class="['btn', isProcessing ? 'btn-warning' : 'btn-success']"
+          <el-icon><Close /></el-icon> 关闭摄像头
+        </el-button>
+        <el-button
+          :type="isProcessing ? 'warning' : 'success'"
+          @click="toggleProcessing"
           :disabled="!isStreaming || !isConnected"
+          :loading="processingLoading"
         >
+          <el-icon><VideoCamera /></el-icon>
           {{ isProcessing ? '停止识别' : '开始识别' }}
-        </button>
+        </el-button>
+        <el-button
+          type="info"
+          @click="generateReport"
+          :disabled="!hasHistory"
+        >
+          <el-icon><Document /></el-icon> 生成报告
+        </el-button>
       </div>
 
-      <!-- 结果显示 -->
-      <div v-if="predictions.length > 0" class="results-container">
-        <h3>识别结果 (FPS: {{ fps.toFixed(1) }})</h3>
-        <div class="predictions">
-          <div 
-            v-for="(pred, index) in predictions" 
-            :key="index" 
-            class="prediction-item"
+      <!-- 实时识别结果 -->
+      <div v-if="currentResults.length > 0" class="results-panel">
+        <h3>📊 实时检测结果 <span class="fps-badge">{{ fps }} fps</span></h3>
+        <div class="results-list">
+          <div
+            v-for="(res, idx) in currentResults"
+            :key="idx"
+            class="result-item"
           >
-            <span class="class-name">{{ pred.className }}</span>
-            <span class="confidence">{{ (pred.confidence * 100).toFixed(1) }}%</span>
-            <div class="confidence-bar">
-              <div 
-                class="confidence-fill" 
-                :style="{ width: (pred.confidence * 100) + '%' }"
-              ></div>
+            <div class="result-header">
+              <span class="fruit-name">
+                <span class="fruit-icon">{{ getFruitIcon(res.fruit_class) }}</span>
+                {{ res.fruit_class }}
+              </span>
+              <span class="confidence">{{ (res.fruit_confidence * 100).toFixed(1) }}%</span>
             </div>
+            <div v-if="res.ripeness" class="ripeness">
+              🍌 成熟度: {{ res.ripeness.class }} ({{ (res.ripeness.confidence * 100).toFixed(1) }}%)
+            </div>
+            <div class="bbox-info">位置: [{{ res.bbox.join(',') }}]</div>
           </div>
         </div>
       </div>
 
-      <!-- 状态信息 -->
-      <div class="status">
-        <div class="status-item">
-          <span class="status-label">摄像头状态:</span>
-          <span :class="['status-value', isStreaming ? 'status-on' : 'status-off']">
-            {{ isStreaming ? '运行中' : '未开启' }}
-          </span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">识别状态:</span>
-          <span :class="['status-value', isProcessing ? 'status-on' : 'status-off']">
-            {{ isProcessing ? '识别中' : '已停止' }}
-          </span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">处理时间:</span>
-          <span class="status-value">{{ processingTime }}ms</span>
-        </div>
-        <div class="status-item">
-          <span class="status-label">WebSocket:</span>
-          <span :class="['status-value', isConnected ? 'status-on' : 'status-off']">
-            {{ isConnected ? '已连接' : '未连接' }}
-          </span>
-        </div>
+      <!-- 统计概览 -->
+      <div v-if="statistics.total_targets > 0" class="stats-panel">
+        <h3>📈 本次识别统计</h3>
+        <el-row :gutter="20">
+          <el-col :span="12">
+            <div class="stat-card">
+              <h4>水果种类次数</h4>
+              <div v-for="(item, idx) in sortedFruitStats" :key="item.fruit" class="stat-item">
+                <span>{{ idx + 1 }}. {{ item.fruit }}</span>
+                <el-progress :percentage="getPercentage(item.count, statistics.total_targets)" :stroke-width="8" />
+                <span class="count">{{ item.count }} 次</span>
+              </div>
+            </div>
+          </el-col>
+          <el-col :span="12">
+            <div v-if="sortedRipenessData.length" class="stat-card">
+              <h4>成熟度分布</h4>
+              <div v-for="item in sortedRipenessData" :key="`${item.fruit}-${item.ripeness}`" class="stat-item">
+                <span>{{ item.fruit }} - {{ item.ripeness }}</span>
+                <el-progress :percentage="getPercentage(item.count, getFruitTotal(item.fruit))" :stroke-width="8" />
+                <span class="count">{{ item.count }} 次</span>
+              </div>
+            </div>
+          </el-col>
+        </el-row>
       </div>
 
-      <!-- 错误信息 -->
-      <div v-if="errorMessage" class="error-message">
-        {{ errorMessage }}
+      <!-- 状态指示器 -->
+      <div class="status-bar">
+        <el-tag :type="isStreaming ? 'success' : 'info'">摄像头: {{ isStreaming ? '运行中' : '未启动' }}</el-tag>
+        <el-tag :type="isConnected ? 'success' : 'danger'">WebSocket: {{ isConnected ? '已连接' : '未连接' }}</el-tag>
+        <el-tag :type="isProcessing ? 'warning' : 'info'">识别: {{ isProcessing ? '进行中' : '已停止' }}</el-tag>
+        <el-tag v-if="statistics.total_targets > 0">已检测目标总数: {{ statistics.total_targets }}</el-tag>
       </div>
 
-      <!-- 调试信息 -->
-      <div v-if="showDebug" class="debug-info">
-        <h4>调试信息</h4>
-        <p>视频状态: {{ videoState }}</p>
-        <p>WebSocket状态: {{ websocketState }}</p>
-        <p>最后错误: {{ lastError }}</p>
-      </div>
+      <!-- 错误提示 -->
+      <el-alert
+        v-if="errorMessage"
+        :title="errorMessage"
+        type="error"
+        :closable="true"
+        @close="errorMessage = ''"
+        show-icon
+      />
     </div>
   </div>
 </template>
 
 <script>
-// 导入封装的WebSocket API函数
-import { createWebSocket, setupWebSocketHandlers, getWebSocketUrl } from '@/api/detection'
+import { Camera, Close, VideoCamera, Document } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
 
 export default {
-  name: 'FruitRecognition',
+  name: 'RealtimeDetectionView',
+  components: { Camera, Close, VideoCamera, Document },
   data() {
     return {
+      // 摄像头相关
       isStreaming: false,
-      isProcessing: false,
-      isConnected: false,
+      cameraLoading: false,
       videoStream: null,
-      websocket: null,
+      videoElement: null,
+      canvasElement: null,
       canvasContext: null,
+
+      // WebSocket
+      websocket: null,
+      isConnected: false,
+      processingLoading: false,
+      reconnectCount: 0,
+      maxReconnect: 3,
+
+      // 识别控制
+      isProcessing: false,
       sendInterval: null,
-      
-      // 结果数据
-      predictions: [],
+      targetFPS: 5,              // 发送帧率
+      imageQuality: 0.7,        // 图像质量
+
+      // 识别结果
+      currentResults: [],
       fps: 0,
-      processingTime: 0,
-      errorMessage: '',
-      
-      // 调试信息
-      showDebug: true,
-      videoState: '未初始化',
-      websocketState: '未连接',
-      lastError: '',
-      
-      // 配置
-      targetFPS: 5, // 降低帧率以减少负载
-      imageQuality: 0.7, // 降低图像质量
-      canvasWidth: 640,
-      canvasHeight: 480,
-      
-      // 视频绘制循环
-      drawInterval: null
-    };
+
+      // 统计报告（符合视频报告格式）
+      statistics: {
+        total_targets: 0,        // 所有帧中检测到的目标总数
+        fruit_counts: {},        // 水果名称 -> 出现次数
+        ripeness_counts: {}      // 水果名称 -> { 成熟度名称 -> 次数 }
+      },
+
+      // 性能监控
+      lastSendTime: 0,
+      fpsCounter: 0,
+      fpsUpdateTimer: null,
+
+      // UI状态
+      errorMessage: ''
+    }
+  },
+  computed: {
+    sortedFruitStats() {
+      const entries = Object.entries(this.statistics.fruit_counts)
+      return entries.map(([fruit, count]) => ({ fruit, count })).sort((a, b) => b.count - a.count)
+    },
+    sortedRipenessData() {
+      const result = []
+      Object.entries(this.statistics.ripeness_counts).forEach(([fruit, ripes]) => {
+        Object.entries(ripes).forEach(([ripeness, count]) => {
+          result.push({ fruit, ripeness, count })
+        })
+      })
+      // 按水果名称排序，再按次数降序
+      return result.sort((a, b) => {
+        if (a.fruit !== b.fruit) return a.fruit.localeCompare(b.fruit)
+        return b.count - a.count
+      })
+    },
+    hasHistory() {
+      return this.statistics.total_targets > 0
+    }
   },
   mounted() {
-    this.initCanvas();
-    console.log('组件已挂载');
+    this.initCanvas()
+    this.startFPSMonitor()
   },
   beforeUnmount() {
-    this.cleanup();
+    this.cleanup()
   },
   methods: {
-    // 初始化画布
     initCanvas() {
-      const canvas = this.$refs.canvasElement;
-      if (canvas) {
-        this.canvasContext = canvas.getContext('2d');
-        canvas.width = this.canvasWidth;
-        canvas.height = this.canvasHeight;
-        console.log('画布初始化完成');
+      this.videoElement = this.$refs.videoElement
+      this.canvasElement = this.$refs.canvasElement
+      if (this.canvasElement) {
+        this.canvasContext = this.canvasElement.getContext('2d')
       }
     },
 
-    // 开启摄像头
+    startFPSMonitor() {
+      this.fpsUpdateTimer = setInterval(() => {
+        this.fps = this.fpsCounter
+        this.fpsCounter = 0
+      }, 1000)
+    },
+
     async startCamera() {
+      this.cameraLoading = true
+      this.errorMessage = ''
+      this.reconnectCount = 0
       try {
-        this.errorMessage = '';
-        this.lastError = '';
-        this.videoState = '正在请求摄像头权限...';
-        
-        console.log('开始启动摄像头...');
-        
-        // 获取摄像头权限
-        this.videoStream = await navigator.mediaDevices.getUserMedia({
+        const stream = await navigator.mediaDevices.getUserMedia({
           video: {
-            width: { ideal: this.canvasWidth },
-            height: { ideal: this.canvasHeight },
+            width: { ideal: 640 },
+            height: { ideal: 480 },
             facingMode: 'environment'
           },
           audio: false
-        });
-
-        const video = this.$refs.videoElement;
-        if (!video) {
-          throw new Error('视频元素未找到');
-        }
-
-        video.srcObject = this.videoStream;
-        this.videoState = '摄像头已连接，等待视频加载...';
-
-        // 等待视频准备就绪
-        await new Promise((resolve, reject) => {
-          const timeout = setTimeout(() => {
-            reject(new Error('视频加载超时'));
-          }, 5000);
-
-          video.onloadedmetadata = () => {
-            clearTimeout(timeout);
-            video.play().then(resolve).catch(reject);
-          };
-
-          video.onerror = () => {
-            clearTimeout(timeout);
-            reject(new Error('视频播放失败'));
-          };
-        });
-
-        this.isStreaming = true;
-        this.videoState = '视频流运行中';
-        console.log('摄像头启动成功');
-
-        // 开始绘制视频到画布
-        this.startDrawingVideo();
-        
-        // 连接WebSocket
-        await this.connectWebSocket();
-        
-      } catch (error) {
-        console.error('开启摄像头失败:', error);
-        this.errorMessage = `开启摄像头失败: ${error.message}`;
-        this.lastError = error.message;
-        this.videoState = `错误: ${error.message}`;
-        this.stopCamera();
+        })
+        this.videoStream = stream
+        this.videoElement.srcObject = stream
+        await this.videoElement.play()
+        this.isStreaming = true
+        this.startDrawing()
+        await this.connectWebSocket()
+      } catch (err) {
+        console.error('开启摄像头失败:', err)
+        this.errorMessage = `无法访问摄像头: ${err.message}`
+      } finally {
+        this.cameraLoading = false
       }
     },
 
-    // 开始绘制视频到画布
-    startDrawingVideo() {
-      this.stopDrawingVideo(); // 先停止之前的绘制
-        
+    startDrawing() {
       const drawFrame = () => {
-        if (this.isStreaming) {
-          this.drawVideoFrame();
-          this.drawInterval = requestAnimationFrame(drawFrame);
+        if (!this.isStreaming) return
+        if (this.canvasContext && this.videoElement) {
+          // 设置画布尺寸与视频实际尺寸一致
+          if (this.canvasElement.width !== this.videoElement.videoWidth) {
+            this.canvasElement.width = this.videoElement.videoWidth
+            this.canvasElement.height = this.videoElement.videoHeight
+          }
+          // 绘制视频帧到画布
+          this.canvasContext.drawImage(this.videoElement, 0, 0, this.canvasElement.width, this.canvasElement.height)
+
+          // 如果有检测结果，绘制框和标签
+          if (this.currentResults.length > 0) {
+            this.drawDetections(this.currentResults)
+          }
         }
-      };
-      
-      drawFrame();
-    },
-
-    // 停止绘制视频
-    stopDrawingVideo() {
-      if (this.drawInterval) {
-        cancelAnimationFrame(this.drawInterval);
-        this.drawInterval = null;
+        requestAnimationFrame(drawFrame)
       }
+      drawFrame()
     },
 
-    // 绘制视频帧到画布
-    drawVideoFrame() {
-      const canvas = this.$refs.canvasElement;
-      const video = this.$refs.videoElement;
-      const ctx = this.canvasContext;
-      
-      if (canvas && video && ctx && video.readyState >= 2) { // HAVE_CURRENT_DATA or better
-        // 清除画布
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        // 绘制视频帧
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        
-        // 如果正在处理，绘制处理状态
+    drawDetections(predictions) {
+      const ctx = this.canvasContext
+      if (!ctx) return
+
+      // 缩放因子（如果画布与视频尺寸一致则为1）
+      const scaleX = this.canvasElement.width / this.videoElement.videoWidth
+      const scaleY = this.canvasElement.height / this.videoElement.videoHeight
+
+      predictions.forEach(pred => {
+        const [x1, y1, x2, y2] = pred.bbox.map((v, i) => (i % 2 === 0 ? v * scaleX : v * scaleY))
+        const width = x2 - x1
+        const height = y2 - y1
+
+        // 绘制边框
+        ctx.strokeStyle = '#f00'
+        ctx.lineWidth = 2
+        ctx.strokeRect(x1, y1, width, height)
+
+        // 标签文本
+        let label = `${pred.fruit_class} ${(pred.fruit_confidence * 100).toFixed(1)}%`
+        if (pred.ripeness) {
+          label += ` | ${pred.ripeness.class}`
+        }
+
+        // 测量文本宽度
+        ctx.font = 'bold 14px "Microsoft YaHei", Arial'
+        const textWidth = ctx.measureText(label).width
+        const textHeight = 20
+
+        // 背景
+        ctx.fillStyle = 'rgba(0,0,0,0.7)'
+        ctx.fillRect(x1, y1 - textHeight - 4, textWidth + 8, textHeight + 4)
+
+        // 文字
+        ctx.fillStyle = '#fff'
+        ctx.fillText(label, x1 + 4, y1 - 6)
+      })
+    },
+
+    async connectWebSocket() {
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+      const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/fruit-recognition/`
+      this.websocket = new WebSocket(wsUrl)
+
+      this.websocket.onopen = () => {
+        console.log('WebSocket 连接已建立')
+        this.isConnected = true
+        this.reconnectCount = 0
+      }
+
+      this.websocket.onmessage = (event) => {
+        const data = JSON.parse(event.data)
+        if (data.status === 'success') {
+          this.currentResults = data.predictions
+          this.fpsCounter++
+
+          // 只有在识别状态下才更新统计
+          if (this.isProcessing) {
+            this.updateStatistics(data.predictions)
+          }
+        } else if (data.status === 'error') {
+          console.error('识别错误:', data.error)
+          this.errorMessage = data.error
+        }
+      }
+
+      this.websocket.onclose = (event) => {
+        console.log('WebSocket 连接已关闭', event)
+        this.isConnected = false
         if (this.isProcessing) {
-          ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
-          ctx.fillRect(10, 10, 200, 40);
-          ctx.fillStyle = '#00ff00';
-          ctx.font = '16px Arial';
-          ctx.fillText('识别中...', 20, 35);
+          this.stopProcessing()
+          ElMessage.warning('WebSocket 断开，识别已停止')
         }
+
+        // 自动重连（仅当摄像头开启且未达到最大重连次数）
+        if (this.isStreaming && this.reconnectCount < this.maxReconnect) {
+          this.reconnectCount++
+          console.log(`尝试重连 WebSocket (${this.reconnectCount}/${this.maxReconnect})...`)
+          setTimeout(() => this.connectWebSocket(), 2000)
+        } else if (this.reconnectCount >= this.maxReconnect) {
+          ElMessage.error('WebSocket 连接失败，请检查后端服务')
+        }
+      }
+
+      this.websocket.onerror = (err) => {
+        console.error('WebSocket 错误:', err)
+        this.errorMessage = 'WebSocket 连接失败'
       }
     },
 
-    // 连接WebSocket - 使用封装的API
-    connectWebSocket() {
-      return new Promise((resolve, reject) => {
-        try {
-          // 使用封装的函数获取WebSocket URL
-          const wsUrl = getWebSocketUrl('/ws/fruit-recognition');
-          
-          console.log('正在连接WebSocket:', wsUrl);
-          
-          // 使用封装的函数创建WebSocket
-          this.websocket = createWebSocket(wsUrl);
-          
-          // 使用封装的函数设置WebSocket处理器
-          setupWebSocketHandlers(this.websocket, {
-            onOpen: () => {
-              console.log('WebSocket连接已建立');
-              this.isConnected = true;
-              this.websocketState = '已连接';
-              resolve();
-            },
-            
-            onMessage: (event) => {
-              this.handleWebSocketMessage(event.data);
-            },
-            
-            onClose: (event) => {
-              console.log('WebSocket连接已关闭:', event);
-              this.isConnected = false;
-              this.websocketState = '已断开: ' + event.code + ' ' + event.reason;
-              if (this.isProcessing) {
-                this.stopProcessing();
-              }
-              
-              // 如果是异常断开，尝试重新连接
-              if (event.code !== 1000) {
-                console.log('WebSocket异常断开，尝试重新连接...');
-                setTimeout(() => {
-                  if (this.isStreaming) {
-                    this.connectWebSocket().catch(console.error);
-                  }
-                }, 3000);
-              }
-            },
-            
-            onError: (error) => {
-              console.error('WebSocket错误:', error);
-              this.errorMessage = 'WebSocket连接错误';
-              this.isConnected = false;
-              this.websocketState = '连接错误';
-              reject(error);
-            }
-          });
-          
-        } catch (error) {
-          console.error('创建WebSocket连接失败:', error);
-          this.errorMessage = '创建WebSocket连接失败';
-          this.websocketState = '创建连接失败';
-          reject(error);
+    updateStatistics(predictions) {
+      // 累加目标总数（每个检测到的目标算一个）
+      this.statistics.total_targets += predictions.length
+
+      predictions.forEach(pred => {
+        const fruit = pred.fruit_class
+        // 水果计数
+        this.statistics.fruit_counts[fruit] = (this.statistics.fruit_counts[fruit] || 0) + 1
+
+        // 成熟度计数
+        if (pred.ripeness) {
+          if (!this.statistics.ripeness_counts[fruit]) {
+            this.statistics.ripeness_counts[fruit] = {}
+          }
+          const ripeClass = pred.ripeness.class
+          this.statistics.ripeness_counts[fruit][ripeClass] =
+            (this.statistics.ripeness_counts[fruit][ripeClass] || 0) + 1
         }
-      });
+      })
     },
 
-    // 处理WebSocket消息
-    handleWebSocketMessage(message) {
-      try {
-        console.log('收到WebSocket消息:', message.substring(0, 100) + '...');
-        const response = JSON.parse(message);
-        
-        if (response.status === 'success') {
-          this.predictions = response.predictions || [];
-          this.processingTime = response.processingTime || 0;
-          this.fps = response.fps || 0;
-          
-          // 在画布上绘制识别结果
-          this.drawPredictionsOnCanvas();
-          
-        } else if (response.status === 'error') {
-          this.errorMessage = response.errorMessage || '处理图像时发生错误';
-          this.lastError = response.errorMessage;
-          console.error('服务器返回错误:', response.errorMessage);
-        }
-        
-      } catch (error) {
-        console.error('解析WebSocket消息失败:', error);
-        this.errorMessage = '解析服务器响应失败';
-        this.lastError = error.message;
-      }
-    },
-
-    // 在画布上绘制识别结果
-    drawPredictionsOnCanvas() {
-      const canvas = this.$refs.canvasElement;
-      const ctx = this.canvasContext;
-      
-      if (!canvas || !ctx) return;
-      
-      // 设置绘制样式
-      ctx.font = '16px Arial, "Microsoft YaHei", sans-serif';
-      ctx.textBaseline = 'top';
-      
-      // 绘制FPS
-      ctx.fillStyle = '#ff00ff';
-      ctx.fillText(`FPS: ${this.fps.toFixed(1)}`, 20, 20);
-      
-      // 绘制预测结果
-      this.predictions.forEach((pred, index) => {
-        const y = 50 + index * 30;
-        const text = `${pred.className} ${(pred.confidence * 100).toFixed(1)}%`;
-        
-        // 绘制背景矩形
-        ctx.fillStyle = 'rgba(0, 0, 0, 0.5)';
-        ctx.fillRect(15, y - 5, ctx.measureText(text).width + 10, 25);
-        
-        // 绘制文本
-        ctx.fillStyle = '#ffffff';
-        ctx.fillText(text, 20, y);
-        
-        // 绘制置信度条
-        const barWidth = 150;
-        const barHeight = 6;
-        const barY = y + 20;
-        
-        // 背景条
-        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-        ctx.fillRect(20, barY, barWidth, barHeight);
-        
-        // 前景条
-        ctx.fillStyle = '#ff0000';
-        ctx.fillRect(20, barY, barWidth * pred.confidence, barHeight);
-      });
-    },
-
-    // 开始处理
     toggleProcessing() {
       if (this.isProcessing) {
-        this.stopProcessing();
+        this.stopProcessing()
       } else {
-        this.startProcessing();
+        this.startProcessing()
       }
     },
 
-    // 开始处理帧
     startProcessing() {
-      if (!this.isStreaming) {
-        this.errorMessage = '请先开启摄像头';
-        return;
-      }
-      
       if (!this.isConnected) {
-        this.errorMessage = 'WebSocket未连接，请检查服务器状态';
-        return;
+        ElMessage.error('WebSocket 未连接，请检查服务器')
+        return
       }
-      
-      this.isProcessing = true;
-      this.errorMessage = '';
-      
-      console.log('开始图像识别处理...');
-      
-      // 设置发送帧的间隔
-      const interval = 1000 / this.targetFPS;
+      // 重置统计数据，开始新一轮识别
+      this.statistics = {
+        total_targets: 0,
+        fruit_counts: {},
+        ripeness_counts: {}
+      }
+      this.currentResults = []
+      this.isProcessing = true
+      ElMessage.success('开始实时识别')
+
+      const interval = 1000 / this.targetFPS
       this.sendInterval = setInterval(() => {
-        this.sendFrameToServer();
-      }, interval);
+        if (this.isProcessing && this.isConnected && this.canvasElement) {
+          this.sendFrame()
+        }
+      }, interval)
     },
 
-    // 停止处理
     stopProcessing() {
-      this.isProcessing = false;
       if (this.sendInterval) {
-        clearInterval(this.sendInterval);
-        this.sendInterval = null;
+        clearInterval(this.sendInterval)
+        this.sendInterval = null
       }
-      console.log('停止图像识别处理');
+      this.isProcessing = false
+      ElMessage.info('识别已停止')
     },
 
-    // 发送帧到服务器
-    sendFrameToServer() {
-      if (!this.isConnected || !this.websocket || this.websocket.readyState !== WebSocket.OPEN) {
-        console.warn('WebSocket连接已断开，停止发送');
-        this.errorMessage = 'WebSocket连接已断开';
-        this.stopProcessing();
-        return;
-      }
-
-      try {
-        const canvas = this.$refs.canvasElement;
-        if (!canvas) {
-          throw new Error('画布元素未找到');
-        }
-
-        // 检查画布是否有有效内容
-        if (canvas.width === 0 || canvas.height === 0) {
-          console.warn('画布尺寸为0，跳过发送');
-          return;
-        }
-
-        // 将画布内容转换为Base64，降低质量以减少数据量
-        const imageData = canvas.toDataURL('image/jpeg', 0.6); // 降低质量到0.6
-        
-        // 检查数据大小
-        if (imageData.length > 500000) { // 如果超过500KB
-          console.warn('图像数据过大:', imageData.length);
-          // 可以进一步降低质量或尺寸
-        }
-
-        // 发送到服务器
-        this.websocket.send(imageData);
-        
-      } catch (error) {
-        console.error('发送帧数据失败:', error);
-        this.errorMessage = '发送图像数据失败: ' + error.message;
-        this.lastError = error.message;
-        
-        // 如果是频繁的错误，停止处理
-        this.stopProcessing();
-      }
+    sendFrame() {
+      if (!this.canvasElement) return
+      // 将画布内容转为 base64 (JPEG 质量 0.7)
+      const dataURL = this.canvasElement.toDataURL('image/jpeg', this.imageQuality)
+      this.websocket.send(dataURL)
     },
 
-    // 关闭摄像头
+    generateReport() {
+      if (this.statistics.total_targets === 0) {
+        ElMessage.warning('暂无识别数据，请先开始识别')
+        return
+      }
+
+      // 构建与视频报告一致的 JSON 结构
+      const reportData = {
+        total_targets: this.statistics.total_targets,
+        fruit_counts: this.statistics.fruit_counts,
+        ripeness_counts: this.statistics.ripeness_counts,
+        timestamp: new Date().toISOString(),
+        duration: '实时检测会话'
+      }
+
+      // 下载为 JSON 文件
+      const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' })
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `realtime_report_${Date.now()}.json`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+
+      ElMessage.success('报告已生成并下载')
+    },
+
     stopCamera() {
-      console.log('正在关闭摄像头...');
-      
-      this.stopProcessing();
-      this.stopDrawingVideo();
-      
+      this.stopProcessing()
       if (this.videoStream) {
-        this.videoStream.getTracks().forEach(track => {
-          track.stop();
-          console.log('停止轨道:', track.kind);
-        });
-        this.videoStream = null;
+        this.videoStream.getTracks().forEach(track => track.stop())
+        this.videoStream = null
       }
-      
-      if (this.websocket && this.websocket.readyState === WebSocket.OPEN) {
-        this.websocket.close();
+      if (this.websocket) {
+        this.websocket.close()
       }
-      
-      this.isStreaming = false;
-      this.isConnected = false;
-      this.predictions = [];
-      this.videoState = '已停止';
-      
-      // 清除画布
-      const canvas = this.$refs.canvasElement;
-      if (canvas && this.canvasContext) {
-        this.canvasContext.clearRect(0, 0, canvas.width, canvas.height);
+      this.isStreaming = false
+      this.isConnected = false
+      this.currentResults = []
+      this.statistics = { total_targets: 0, fruit_counts: {}, ripeness_counts: {} }
+      this.errorMessage = ''
+      this.reconnectCount = 0
+
+      // 清空画布
+      if (this.canvasContext) {
+        this.canvasContext.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height)
       }
-      
-      console.log('摄像头已关闭');
+      ElMessage.info('摄像头已关闭')
     },
 
-    // 清理资源
     cleanup() {
-      this.stopCamera();
+      if (this.sendInterval) clearInterval(this.sendInterval)
+      if (this.fpsUpdateTimer) clearInterval(this.fpsUpdateTimer)
+      this.stopCamera()
+    },
+
+    getFruitIcon(fruit) {
+      const iconMap = {
+        '香蕉': '🍌',
+        '芒果': '🥭',
+        '草莓': '🍓',
+        '苹果': '🍎',
+        '橙子': '🍊',
+        '葡萄': '🍇',
+        '西瓜': '🍉',
+        '菠萝': '🍍',
+        '猕猴桃': '🥝',
+        '柠檬': '🍋'
+      }
+      return iconMap[fruit] || '🍎'
+    },
+
+    getPercentage(count, total) {
+      if (!total) return 0
+      return ((count / total) * 100).toFixed(1)
+    },
+
+    getFruitTotal(fruit) {
+      return this.statistics.fruit_counts[fruit] || 0
     }
   }
-};
+}
 </script>
 
 <style scoped>
-.fruit-recognition {
+/* 样式与原有保持一致，仅作微调，此处省略重复部分，但必须包含完整样式 */
+.realtime-detection {
   padding: 20px;
   font-family: 'Arial', 'Microsoft YaHei', sans-serif;
 }
 
 .container {
-  max-width: 800px;
+  max-width: 1200px;
   margin: 0 auto;
 }
 
 h1 {
   text-align: center;
-  color: #333;
+  color: #2c3e50;
   margin-bottom: 30px;
 }
 
-.video-container {
+.video-wrapper {
   position: relative;
   width: 100%;
   margin-bottom: 20px;
-  border: 2px solid #ddd;
-  border-radius: 8px;
+  border-radius: 12px;
   overflow: hidden;
-  background-color: #000;
+  background: #000;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.2);
 }
 
-.video-preview, .video-canvas {
+.video-preview {
   width: 100%;
   height: auto;
   display: block;
 }
 
-/* 修改这里：视频元素不隐藏，但画布覆盖在视频上方 */
-.video-container {
-  position: relative;
-}
-
-.video-preview {
-  /* 视频作为背景 */
-  width: 100%;
-  height: auto;
-}
-
-.video-canvas {
-  /* 画布覆盖在视频上方，用于绘制识别结果 */
+.overlay-canvas {
   position: absolute;
   top: 0;
   left: 0;
-  background: transparent; /* 透明背景，显示下方的视频 */
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
 }
 
 .controls {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   justify-content: center;
-  margin-bottom: 20px;
+  margin-bottom: 24px;
   flex-wrap: wrap;
 }
 
-.btn {
-  padding: 10px 20px;
-  border: none;
-  border-radius: 5px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: bold;
-  transition: all 0.3s ease;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.btn-primary {
-  background-color: #007bff;
-  color: white;
-}
-
-.btn-secondary {
-  background-color: #6c757d;
-  color: white;
-}
-
-.btn-success {
-  background-color: #28a745;
-  color: white;
-}
-
-.btn-warning {
-  background-color: #ffc107;
-  color: #212529;
-}
-
-.results-container {
-  background-color: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 8px;
+.results-panel {
+  background: #f8f9fa;
+  border-radius: 12px;
   padding: 20px;
   margin-bottom: 20px;
+  max-height: 300px;
+  overflow-y: auto;
 }
 
-.results-container h3 {
+.results-panel h3 {
   margin-top: 0;
-  color: #495057;
-  border-bottom: 1px solid #dee2e6;
-  padding-bottom: 10px;
-}
-
-.predictions {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.prediction-item {
-  display: flex;
-  align-items: center;
-  gap: 15px;
-  padding: 8px;
-  background-color: white;
-  border-radius: 4px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-}
-
-.class-name {
-  flex: 1;
-  font-weight: bold;
-  color: #333;
-}
-
-.confidence {
-  width: 60px;
-  text-align: right;
-  color: #007bff;
-  font-weight: bold;
-}
-
-.confidence-bar {
-  width: 200px;
-  height: 8px;
-  background-color: #e9ecef;
-  border-radius: 4px;
-  overflow: hidden;
-}
-
-.confidence-fill {
-  height: 100%;
-  background-color: #28a745;
-  transition: width 0.3s ease;
-}
-
-.status {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 15px;
-  margin-bottom: 20px;
-}
-
-.status-item {
+  margin-bottom: 15px;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 15px;
-  background-color: #f8f9fa;
-  border-radius: 5px;
-  border-left: 4px solid #6c757d;
 }
 
-.status-label {
-  font-weight: bold;
-  color: #495057;
-}
-
-.status-value {
-  font-weight: bold;
-}
-
-.status-on {
-  color: #28a745;
-}
-
-.status-off {
-  color: #dc3545;
-}
-
-.error-message {
-  background-color: #f8d7da;
-  color: #721c24;
-  padding: 15px;
-  border-radius: 5px;
-  border: 1px solid #f5c6cb;
-  text-align: center;
-  margin-bottom: 15px;
-}
-
-.debug-info {
-  background-color: #f8f9fa;
-  border: 1px solid #dee2e6;
-  border-radius: 5px;
-  padding: 15px;
-  margin-top: 20px;
+.fps-badge {
   font-size: 14px;
+  background: #409eff;
+  color: white;
+  padding: 2px 8px;
+  border-radius: 20px;
 }
 
-.debug-info h4 {
+.results-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.result-item {
+  background: white;
+  border-radius: 8px;
+  padding: 12px;
+  border-left: 4px solid #409eff;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+}
+
+.result-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+
+.fruit-name {
+  font-weight: bold;
+  font-size: 16px;
+}
+
+.fruit-icon {
+  margin-right: 6px;
+  font-size: 18px;
+}
+
+.confidence {
+  color: #67c23a;
+  font-weight: bold;
+}
+
+.ripeness {
+  font-size: 13px;
+  color: #e6a23c;
+  margin-bottom: 6px;
+}
+
+.bbox-info {
+  font-size: 12px;
+  color: #909399;
+  font-family: monospace;
+}
+
+.stats-panel {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+
+.stats-panel h3 {
   margin-top: 0;
-  color: #6c757d;
-  border-bottom: 1px solid #dee2e6;
-  padding-bottom: 5px;
+  margin-bottom: 20px;
+  color: #2c3e50;
 }
 
-.debug-info p {
-  margin: 5px 0;
+.stat-card {
+  background: #f8f9fa;
+  border-radius: 8px;
+  padding: 16px;
+  height: 100%;
+}
+
+.stat-card h4 {
+  margin: 0 0 12px 0;
+  color: #606266;
+  font-size: 16px;
+}
+
+.stat-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.stat-item span:first-child {
+  width: 100px;
+  font-weight: 500;
+}
+
+.stat-item .count {
+  min-width: 60px;
+  text-align: right;
+  color: #409eff;
+  font-weight: bold;
+}
+
+.status-bar {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-bottom: 20px;
 }
 
 @media (max-width: 768px) {
-  .video-container {
-    margin-bottom: 15px;
-  }
-  
   .controls {
     flex-direction: column;
     align-items: center;
   }
-  
-  .btn {
+  .controls .el-button {
     width: 200px;
   }
-  
-  .status {
-    grid-template-columns: 1fr;
+  .stat-item {
+    flex-wrap: wrap;
   }
-  
-  .prediction-item {
-    flex-direction: column;
-    align-items: flex-start;
-    gap: 8px;
-  }
-  
-  .confidence-bar {
-    width: 100%;
+  .stat-item .el-progress {
+    flex: 1;
   }
 }
 </style>
