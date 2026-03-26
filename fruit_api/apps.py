@@ -150,6 +150,7 @@ class LoginAppConfig(AppConfig):
 
         # YOLO模型
         self.yolo_model = YOLO(yolo_path)
+        self.RIPENESS_SUPPORTED = settings.MODEL_CONFIG['RIPENESS_SUPPORTED']
 
     def get_ripeness_info(self, fruit_name):
         """

@@ -11,3 +11,4 @@ def health_check(request):
         "status": "ok",
         "message": "Service is healthy"
     })
+# daphne -b 0.0.0.0 -p 8000 shuiguo.asgi:application

@@ -38,7 +38,8 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "fruit_api",
-    "rest_framework"
+    "rest_framework",
+    "channels"
 ]
 
 MIDDLEWARE = [
@@ -172,5 +173,15 @@ MODEL_CONFIG = {
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:5173',   # 前端开发服务器地址
-    # 如果有其他前端地址（如生产环境），也一并加入
+    "http://127.0.0.1:5173",
 ]
+
+# 配置 ASGI 应用
+ASGI_APPLICATION = 'shuiguo.asgi.application'
+
+# 通道层配置（使用内存作为后端，生产环境建议用 Redis）
+CHANNEL_LAYERS = {
+    'default': {
+        'BACKEND': 'channels.layers.InMemoryChannelLayer',
+    },
+}
