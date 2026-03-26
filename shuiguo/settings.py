@@ -173,7 +173,6 @@ MODEL_CONFIG = {
 
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:5173',   # 前端开发服务器地址
-    "http://127.0.0.1:5173",
 ]
 
 # 配置 ASGI 应用
