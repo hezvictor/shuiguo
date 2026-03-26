@@ -67,3 +67,13 @@ export function cleanupVideoTask(taskId) {
     timeout: 10000
   })
 }
+
+// detection.js
+export function saveRealtimeReport(data) {
+  return request({
+    url: '/api/realtime/save_report/',
+    method: 'post',
+    data: data,
+    timeout: 10000
+  })
+}

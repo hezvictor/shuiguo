@@ -36,11 +36,26 @@
           {{ isProcessing ? '停止识别' : '开始识别' }}
         </el-button>
         <el-button
+          type="success"
+          @click="saveCurrentReport"
+          :disabled="!hasHistory || saving"
+          :loading="saving"
+        >
+          <el-icon><Document /></el-icon> 保存本次记录
+        </el-button>
+        <el-button
+          type="warning"
+          @click="resetStatistics"
+          :disabled="!hasHistory"
+        >
+          <el-icon><Refresh /></el-icon> 重置统计
+        </el-button>
+        <el-button
           type="info"
           @click="generateReport"
           :disabled="!hasHistory"
         >
-          <el-icon><Document /></el-icon> 生成报告
+          <el-icon><Download /></el-icon> 下载报告
         </el-button>
       </div>
 
@@ -117,14 +132,16 @@
 </template>
 
 <script>
-import { Camera, Close, VideoCamera, Document } from '@element-plus/icons-vue'
+import { Camera, Close, VideoCamera, Document, Refresh, Download } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
+import { saveRealtimeReport } from '@/api/detection'
 
 export default {
   name: 'RealtimeDetectionView',
-  components: { Camera, Close, VideoCamera, Document },
+  components: { Camera, Close, VideoCamera, Document, Refresh, Download },
   data() {
     return {
+      autoSaved: false,
       // 摄像头相关
       isStreaming: false,
       cameraLoading: false,
@@ -163,7 +180,8 @@ export default {
       fpsUpdateTimer: null,
 
       // UI状态
-      errorMessage: ''
+      errorMessage: '',
+      saving: false
     }
   },
   computed: {
@@ -371,44 +389,47 @@ export default {
       })
     },
 
-    toggleProcessing() {
-      if (this.isProcessing) {
-        this.stopProcessing()
-      } else {
-        this.startProcessing()
-      }
-    },
-
+    // ===== 修改：开始识别时不清空已有统计数据，仅当用户主动重置时清空 =====
     startProcessing() {
       if (!this.isConnected) {
-        ElMessage.error('WebSocket 未连接，请检查服务器')
-        return
+        ElMessage.error('WebSocket 未连接，请检查服务器');
+        return;
       }
-      // 重置统计数据，开始新一轮识别
-      this.statistics = {
-        total_targets: 0,
-        fruit_counts: {},
-        ripeness_counts: {}
+      // 如果当前没有统计数据（即新会话），则初始化
+      if (this.statistics.total_targets === 0) {
+        this.statistics = {
+          total_targets: 0,
+          fruit_counts: {},
+          ripeness_counts: {}
+        };
+        this.autoSaved = false;
       }
-      this.currentResults = []
-      this.isProcessing = true
-      ElMessage.success('开始实时识别')
+      this.isProcessing = true;
+      ElMessage.success('开始实时识别');
 
-      const interval = 1000 / this.targetFPS
+      const interval = 1000 / this.targetFPS;
       this.sendInterval = setInterval(() => {
         if (this.isProcessing && this.isConnected && this.canvasElement) {
-          this.sendFrame()
+          this.sendFrame();
         }
-      }, interval)
+      }, interval);
     },
 
     stopProcessing() {
       if (this.sendInterval) {
-        clearInterval(this.sendInterval)
-        this.sendInterval = null
+        clearInterval(this.sendInterval);
+        this.sendInterval = null;
       }
-      this.isProcessing = false
-      ElMessage.info('识别已停止')
+      this.isProcessing = false;
+      ElMessage.info('识别已暂停');
+    },
+
+    toggleProcessing() {
+      if (this.isProcessing) {
+        this.stopProcessing();
+      } else {
+        this.startProcessing();
+      }
     },
 
     sendFrame() {
@@ -416,6 +437,59 @@ export default {
       // 将画布内容转为 base64 (JPEG 质量 0.7)
       const dataURL = this.canvasElement.toDataURL('image/jpeg', this.imageQuality)
       this.websocket.send(dataURL)
+    },
+
+    // ===== 修改：重置统计前先保存当前会话 =====
+    resetStatistics() {
+      if (this.statistics.total_targets === 0) return;
+      // 保存当前统计快照（如果尚未自动保存）
+      if (!this.autoSaved && this.statistics.total_targets > 0) {
+        this.autoSaveReport();
+      }
+      this.statistics = {
+        total_targets: 0,
+        fruit_counts: {},
+        ripeness_counts: {}
+      };
+      this.currentResults = [];
+      this.autoSaved = false;
+      ElMessage.info('统计已重置，之前的数据已保存');
+    },
+
+    // ===== 修改：自动保存报告，防止重复保存 =====
+    async autoSaveReport(snapshot = null) {
+      if (this.saving) return;
+      if (!snapshot && this.statistics.total_targets === 0) return;
+
+      this.saving = true;
+      try {
+        const payload = snapshot || {
+          total_targets: this.statistics.total_targets,
+          fruit_counts: { ...this.statistics.fruit_counts },
+          ripeness_counts: JSON.parse(JSON.stringify(this.statistics.ripeness_counts))
+        };
+        await saveRealtimeReport(payload);
+        this.autoSaved = true;
+        ElMessage.success('检测报告已自动保存至历史记录');
+      } catch (error) {
+        console.error('自动保存失败:', error);
+        // 静默失败，不打扰用户
+      } finally {
+        this.saving = false;
+      }
+    },
+
+    // ===== 修改：手动保存报告，同样避免重复保存 =====
+    async saveCurrentReport() {
+      if (this.statistics.total_targets === 0) {
+        ElMessage.warning('暂无数据可保存');
+        return;
+      }
+      if (this.autoSaved) {
+        ElMessage.info('当前会话数据已保存过，无需重复保存');
+        return;
+      }
+      await this.autoSaveReport();
     },
 
     generateReport() {
@@ -447,33 +521,53 @@ export default {
       ElMessage.success('报告已生成并下载')
     },
 
-    stopCamera() {
-      this.stopProcessing()
+    // ===== 修改：关闭摄像头前保存当前会话 =====
+    async stopCamera() {
+      // 停止识别循环
+      this.stopProcessing();
+
+      // 自动保存本次会话数据（如果有检测记录且未自动保存）
+      if (this.statistics.total_targets > 0 && !this.autoSaved) {
+        await this.autoSaveReport();
+      }
+
+      // 关闭视频流
       if (this.videoStream) {
-        this.videoStream.getTracks().forEach(track => track.stop())
-        this.videoStream = null
+        this.videoStream.getTracks().forEach(track => track.stop());
+        this.videoStream = null;
       }
+
+      // 关闭 WebSocket
       if (this.websocket) {
-        this.websocket.close()
+        this.websocket.close();
       }
-      this.isStreaming = false
-      this.isConnected = false
-      this.currentResults = []
-      this.statistics = { total_targets: 0, fruit_counts: {}, ripeness_counts: {} }
-      this.errorMessage = ''
-      this.reconnectCount = 0
+
+      this.isStreaming = false;
+      this.isConnected = false;
+      this.currentResults = [];
+      this.statistics = { total_targets: 0, fruit_counts: {}, ripeness_counts: {} };
+      this.errorMessage = '';
+      this.reconnectCount = 0;
 
       // 清空画布
       if (this.canvasContext) {
-        this.canvasContext.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height)
+        this.canvasContext.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height);
       }
-      ElMessage.info('摄像头已关闭')
+
+      ElMessage.info('摄像头已关闭');
     },
 
     cleanup() {
       if (this.sendInterval) clearInterval(this.sendInterval)
       if (this.fpsUpdateTimer) clearInterval(this.fpsUpdateTimer)
-      this.stopCamera()
+      // 注意：cleanup 在组件销毁时调用，不应再调用 stopCamera 以避免重复保存
+      // 只需清理定时器和资源，但 stopCamera 中会关闭流和连接，这里简单处理
+      if (this.videoStream) {
+        this.videoStream.getTracks().forEach(track => track.stop());
+      }
+      if (this.websocket) {
+        this.websocket.close();
+      }
     },
 
     getFruitIcon(fruit) {
@@ -505,7 +599,6 @@ export default {
 </script>
 
 <style scoped>
-/* 样式与原有保持一致，仅作微调，此处省略重复部分，但必须包含完整样式 */
 .realtime-detection {
   padding: 20px;
   font-family: 'Arial', 'Microsoft YaHei', sans-serif;
