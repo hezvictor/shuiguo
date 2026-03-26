@@ -184,3 +184,9 @@ CHANNEL_LAYERS = {
         'BACKEND': 'channels.layers.InMemoryChannelLayer',
     },
 }
+REST_FRAMEWORK = {
+    'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
+    'PAGE_SIZE': 10,                     # 默认每页 10 条
+    'PAGE_SIZE_QUERY_PARAM': 'page_size',# 允许客户端指定每页大小
+    'MAX_PAGE_SIZE': 100,                # 最大每页限制
+}

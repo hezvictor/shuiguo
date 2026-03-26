@@ -35,6 +35,28 @@ from .serializers import (
 )
 from django.apps import apps
 
+# 修改视图类
+class DetectionHistoryDetailView(generics.RetrieveDestroyAPIView):
+    """获取单条历史记录详情，支持删除"""
+    serializer_class = DetectionHistorySerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return DetectionHistory.objects.filter(user=self.request.user)
+
+    def perform_destroy(self, instance):
+        """删除记录前先删除关联的报告文件"""
+        # 删除报告文件（如果存在）
+        if instance.report_file:
+            file_path = os.path.join(settings.MEDIA_ROOT, instance.report_file)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    # 记录日志但继续删除数据库记录
+                    print(f"删除报告文件失败: {e}")
+        # 删除数据库记录
+        instance.delete()
 
 # ==================== 历史记录视图 ====================
 class DetectionHistoryListView(generics.ListAPIView):
@@ -47,13 +69,26 @@ class DetectionHistoryListView(generics.ListAPIView):
         return DetectionHistory.objects.filter(user=self.request.user).order_by('-created_at')
 
 
-class DetectionHistoryDetailView(generics.RetrieveAPIView):
-    """获取单条历史记录详情"""
+class DetectionHistoryDetailView(generics.RetrieveDestroyAPIView):
+    """获取单条历史记录详情，支持删除"""
     serializer_class = DetectionHistorySerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         return DetectionHistory.objects.filter(user=self.request.user)
+
+    def perform_destroy(self, instance):
+        """删除记录前先删除关联的报告文件"""
+        if instance.report_file:
+            file_path = os.path.join(settings.MEDIA_ROOT, instance.report_file)
+            if os.path.exists(file_path):
+                try:
+                    os.remove(file_path)
+                except OSError as e:
+                    # 记录日志但继续删除数据库记录
+                    print(f"删除报告文件失败: {e}")
+        # 删除数据库记录
+        instance.delete()
 
 
 # ==================== 登录/主页视图 ====================
@@ -869,12 +904,12 @@ def video_report(request, task_id):
         report_data = json.load(f)
     return Response(report_data)
 
-# views.py
+
 @api_view(['POST'])
 @permission_classes([IsAuthenticated])
 def save_realtime_report(request):
     """
-    保存实时检测报告
+    保存实时检测报告，并生成 JSON 文件
     请求体示例:
     {
         "total_targets": 10,
@@ -887,19 +922,32 @@ def save_realtime_report(request):
     if not all(k in data for k in required_keys):
         return Response({'error': '缺少必要字段'}, status=status.HTTP_400_BAD_REQUEST)
 
-    # 构建 summary
+    # 构建摘要信息
     summary = {
         'total_targets': data['total_targets'],
         'fruit_counts': data['fruit_counts'],
         'ripeness_counts': data['ripeness_counts'],
     }
 
+    # 生成报告文件（JSON 格式）
+    report_dir = os.path.join(settings.MEDIA_ROOT, 'reports')
+    os.makedirs(report_dir, exist_ok=True)
+    report_filename = f'reports/realtime_report_{uuid.uuid4().hex}.json'
+    report_path = os.path.join(settings.MEDIA_ROOT, report_filename)
+    with open(report_path, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2)
+
     # 创建历史记录
+    from .models import DetectionHistory
     DetectionHistory.objects.create(
         user=request.user,
         detection_type='realtime',
         summary=summary,
-        report_file=None   # 实时检测不生成文件
+        report_file=report_filename   # 存储相对路径
     )
 
-    return Response({'status': 'success', 'message': '报告已保存'}, status=status.HTTP_201_CREATED)
+    return Response({
+        'status': 'success',
+        'message': '报告已保存',
+        'report_file': report_filename
+    }, status=status.HTTP_201_CREATED)
