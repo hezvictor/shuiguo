@@ -116,6 +116,10 @@
             <el-icon><Monitor /></el-icon>
             <span>实时检测(连接摄像头)</span>
           </el-menu-item>
+          <el-menu-item index="/detection/diameter">
+            <el-icon><Picture /></el-icon>
+            <span>果径测量</span>
+          </el-menu-item>
         </el-sub-menu>
 
         <!-- 检测历史 -->

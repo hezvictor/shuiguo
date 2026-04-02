@@ -40,6 +40,11 @@ const routes = [
         component: () => import('../views/RealtimeDetectionView.vue')
       },
       {
+        path: '/detection/diameter',
+        name: 'diameterMeasurement',
+        component: () => import('../views/DiameterMeasurementView.vue')
+      },
+      {
         path: '/history',
         name: 'detectionHistory',
         component: () => import('../views/DetectionHistoryView.vue')

@@ -1,68 +1,59 @@
-<template>
+﻿<template>
   <div class="history-container">
     <div class="container">
       <h1>检测历史</h1>
 
-      <!-- 加载状态 -->
+      <div class="toolbar">
+        <el-select v-model="detectionType" placeholder="按类型筛选" clearable style="width: 220px" @change="onFilterChange">
+          <el-option label="全部" value="" />
+          <el-option label="图片检测" value="image" />
+          <el-option label="视频检测" value="video" />
+          <el-option label="实时检测" value="realtime" />
+          <el-option label="果径测量" value="diameter" />
+        </el-select>
+        <el-button @click="fetchHistory" :loading="loading">刷新</el-button>
+      </div>
+
       <div v-if="loading" class="loading-wrapper">
         <el-skeleton :rows="5" animated />
       </div>
 
-      <!-- 历史记录表格 -->
-      <el-table
-        v-else
-        :data="historyList"
-        stripe
-        style="width: 100%"
-        v-loading="loading"
-      >
-        <el-table-column prop="detection_type_display" label="检测类型" width="100">
+      <el-table v-else :data="historyList" stripe style="width: 100%" v-loading="loading">
+        <el-table-column prop="detection_type_display" label="检测类型" width="130">
           <template #default="{ row }">
-            <el-tag :type="row.detection_type === 'image' ? 'primary' : 'success'">
-              {{ row.detection_type_display }}
-            </el-tag>
+            <el-tag :type="tagType(row.detection_type)">{{ row.detection_type_display }}</el-tag>
           </template>
         </el-table-column>
+
         <el-table-column prop="created_at" label="检测时间" width="180">
-          <template #default="{ row }">
-            {{ formatDateTime(row.created_at) }}
-          </template>
+          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
         </el-table-column>
+
         <el-table-column prop="summary" label="摘要信息">
           <template #default="{ row }">
             <div class="summary-text">
-              目标总数: {{ row.summary.total_targets || 0 }}
-              <span v-if="row.summary.fruit_counts">
-                | 水果种类: {{ Object.keys(row.summary.fruit_counts).length }}
-              </span>
+              <template v-if="row.detection_type === 'diameter'">
+                目标: {{ row.summary?.total_targets ?? 0 }}
+                | 有效测量: {{ row.summary?.valid_measurements ?? 0 }}
+                | 平均果径: {{ formatNumber(row.summary?.statistics?.avg_diameter_mm) }} mm
+              </template>
+              <template v-else>
+                目标总数: {{ row.summary?.total_targets ?? 0 }}
+                <span v-if="row.summary?.fruit_counts"> | 水果种类: {{ Object.keys(row.summary.fruit_counts).length }}</span>
+              </template>
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="250">
+
+        <el-table-column label="操作" width="260">
           <template #default="{ row }">
-            <el-button type="primary" size="small" @click="viewDetail(row)">
-              查看详情
-            </el-button>
-            <el-button
-              v-if="row.report_file"
-              type="success"
-              size="small"
-              @click="downloadReport(row.report_file)"
-            >
-              下载报告
-            </el-button>
-            <el-button
-              type="danger"
-              size="small"
-              @click="deleteHistory(row)"
-            >
-              删除
-            </el-button>
+            <el-button type="primary" size="small" @click="viewDetail(row)">查看详情</el-button>
+            <el-button v-if="row.report_file" type="success" size="small" @click="downloadReport(row.report_file)">下载报告</el-button>
+            <el-button type="danger" size="small" @click="deleteHistory(row)">删除</el-button>
           </template>
         </el-table-column>
       </el-table>
 
-      <!-- 分页 -->
       <el-pagination
         v-if="total > 0"
         background
@@ -71,24 +62,49 @@
         :current-page="currentPage"
         :page-size="pageSize"
         @current-change="handlePageChange"
-        style="margin-top: 20px; justify-content: center;"
+        style="margin-top: 20px; justify-content: center"
       />
 
-      <!-- 详情弹窗（保持不变） -->
-      <el-dialog
-        v-model="detailVisible"
-        title="检测报告详情"
-        width="80%"
-        :close-on-click-modal="false"
-      >
-        <!-- 详情内容保持不变 -->
+      <el-dialog v-model="detailVisible" title="检测报告详情" width="80%" :close-on-click-modal="false">
+        <div v-if="currentDetail" class="detail-content">
+          <div class="detail-summary">
+            <p><strong>检测类型：</strong>{{ currentDetail.detection_type_display }}</p>
+            <p><strong>检测时间：</strong>{{ formatDateTime(currentDetail.created_at) }}</p>
+            <p><strong>目标总数：</strong>{{ currentDetail.summary?.total_targets ?? 0 }}</p>
+          </div>
+
+          <div class="stat-section" v-if="currentDetail.detection_type === 'diameter' && currentDetail.summary?.statistics">
+            <h4>果径统计</h4>
+            <p>有效测量: {{ currentDetail.summary?.valid_measurements ?? 0 }}</p>
+            <p>平均果径: {{ formatNumber(currentDetail.summary.statistics.avg_diameter_mm) }} mm</p>
+            <p>最小果径: {{ formatNumber(currentDetail.summary.statistics.min_diameter_mm) }} mm</p>
+            <p>最大果径: {{ formatNumber(currentDetail.summary.statistics.max_diameter_mm) }} mm</p>
+          </div>
+
+          <div class="stat-section" v-if="sortedFruitCounts.length > 0">
+            <h4>水果统计</h4>
+            <el-table :data="sortedFruitCounts" border>
+              <el-table-column prop="fruit" label="水果" />
+              <el-table-column prop="count" label="数量" width="100" />
+            </el-table>
+          </div>
+
+          <div class="stat-section" v-if="sortedRipenessData.length > 0">
+            <h4>熟度统计</h4>
+            <el-table :data="sortedRipenessData" border>
+              <el-table-column prop="fruit" label="水果" />
+              <el-table-column prop="ripeness" label="熟度" />
+              <el-table-column prop="count" label="数量" width="100" />
+            </el-table>
+          </div>
+        </div>
       </el-dialog>
     </div>
   </div>
 </template>
 
 <script>
-import { ref, onMounted, computed } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/utils/request'
 
@@ -102,25 +118,36 @@ export default {
     const pageSize = ref(10)
     const detailVisible = ref(false)
     const currentDetail = ref(null)
+    const detectionType = ref('')
 
-    // 格式化时间
     const formatDateTime = (isoString) => {
       if (!isoString) return ''
-      const date = new Date(isoString)
-      return date.toLocaleString('zh-CN')
+      return new Date(isoString).toLocaleString('zh-CN')
     }
 
-    // 获取历史列表
+    const formatNumber = (v) => (v === null || v === undefined ? '-' : Number(v).toFixed(2))
+
+    const tagType = (type) => {
+      if (type === 'image') return 'primary'
+      if (type === 'video') return 'success'
+      if (type === 'realtime') return 'warning'
+      if (type === 'diameter') return 'info'
+      return ''
+    }
+
     const fetchHistory = async () => {
       loading.value = true
       try {
+        const params = {
+          page: currentPage.value,
+          page_size: pageSize.value
+        }
+        if (detectionType.value) params.detection_type = detectionType.value
+
         const res = await request({
           url: '/api/detection/history/',
           method: 'get',
-          params: {
-            page: currentPage.value,
-            page_size: pageSize.value
-          }
+          params
         })
         historyList.value = res.results || res
         total.value = res.count || historyList.value.length
@@ -132,7 +159,11 @@ export default {
       }
     }
 
-    // 查看详情
+    const onFilterChange = () => {
+      currentPage.value = 1
+      fetchHistory()
+    }
+
     const viewDetail = async (row) => {
       if (row.summary && row.report_file) {
         currentDetail.value = row
@@ -152,7 +183,6 @@ export default {
       }
     }
 
-    // 下载报告文件
     const downloadReport = (filePath) => {
       if (!filePath) {
         ElMessage.warning('该记录没有关联的报告文件')
@@ -167,27 +197,21 @@ export default {
       document.body.removeChild(a)
     }
 
-    // 删除历史记录
     const deleteHistory = async (row) => {
       try {
-        await ElMessageBox.confirm(
-          `确定要删除 ${row.detection_type_display} 记录吗？`,
-          '删除确认',
-          {
-            confirmButtonText: '确定',
-            cancelButtonText: '取消',
-            type: 'warning',
-          }
-        )
+        await ElMessageBox.confirm(`确定要删除 ${row.detection_type_display} 记录吗？`, '删除确认', {
+          confirmButtonText: '确定',
+          cancelButtonText: '取消',
+          type: 'warning'
+        })
+
         await request({
           url: `/api/detection/history/${row.id}/`,
           method: 'delete'
         })
+
         ElMessage.success('删除成功')
-        // 如果删除后当前页没有数据且不是第一页，则跳转到上一页
-        if (historyList.value.length === 1 && currentPage.value > 1) {
-          currentPage.value--
-        }
+        if (historyList.value.length === 1 && currentPage.value > 1) currentPage.value--
         fetchHistory()
       } catch (error) {
         if (error !== 'cancel') {
@@ -197,13 +221,11 @@ export default {
       }
     }
 
-    // 分页切换
     const handlePageChange = (page) => {
       currentPage.value = page
       fetchHistory()
     }
 
-    // 计算水果统计表格数据
     const sortedFruitCounts = computed(() => {
       if (!currentDetail.value?.summary?.fruit_counts) return []
       const counts = currentDetail.value.summary.fruit_counts
@@ -212,7 +234,6 @@ export default {
         .sort((a, b) => b.count - a.count)
     })
 
-    // 计算成熟度统计数据
     const sortedRipenessData = computed(() => {
       if (!currentDetail.value?.summary?.ripeness_counts) return []
       const result = []
@@ -228,9 +249,7 @@ export default {
       })
     })
 
-    onMounted(() => {
-      fetchHistory()
-    })
+    onMounted(fetchHistory)
 
     return {
       loading,
@@ -240,7 +259,12 @@ export default {
       pageSize,
       detailVisible,
       currentDetail,
+      detectionType,
       formatDateTime,
+      formatNumber,
+      tagType,
+      fetchHistory,
+      onFilterChange,
       viewDetail,
       downloadReport,
       deleteHistory,
@@ -275,6 +299,12 @@ h1 {
   color: #2c3e50;
 }
 
+.toolbar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
 .summary-text {
   font-size: 14px;
   color: #606266;
@@ -300,11 +330,5 @@ h1 {
 
 .loading-wrapper {
   padding: 40px 0;
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
 }
 </style>

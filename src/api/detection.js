@@ -77,3 +77,13 @@ export function saveRealtimeReport(data) {
     timeout: 10000
   })
 }
+
+export function measureFruitDiameter(formData) {
+  return request({
+    url: '/api/measure/diameter/',
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 120000
+  })
+}
