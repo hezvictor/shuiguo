@@ -1,65 +1,41 @@
 <template>
   <div id="app">
-    <!-- 路由视图 - 会根据当前路由显示不同内容 -->
-    <!-- 对于登录后的主页，会使用MainLayout组件 -->
     <RouterView />
   </div>
 </template>
 
 <script>
-
 export default {
   name: 'App'
 }
 </script>
 
 <style>
-/* 全局背景样式 */
 body {
   margin: 0;
   padding: 0;
   min-height: 100vh;
-  background: linear-gradient(
-    135deg,
-    #e8f5e8 0%,
-    #d4edda 25%,
-    #c3e6cb 50%,
-    #b8dcc0 75%,
-    #a8d1b5 100%
-  );
+  background: linear-gradient(135deg, #e8f5e8 0%, #d4edda 25%, #c3e6cb 50%, #b8dcc0 75%, #a8d1b5 100%);
   background-attachment: fixed;
 }
 
-/* 添加装饰性背景图案 */
 body::before {
-  content: "";
+  content: '';
   position: fixed;
   top: 0;
   left: 0;
   width: 100%;
   height: 100%;
-  background-image: radial-gradient(
-      circle at 20% 80%,
-      rgba(120, 190, 150, 0.1) 0%,
-      transparent 50%
-    ),
-    radial-gradient(
-      circle at 80% 20%,
-      rgba(90, 160, 120, 0.08) 0%,
-      transparent 50%
-    ),
-    radial-gradient(
-      circle at 40% 40%,
-      rgba(140, 200, 160, 0.06) 0%,
-      transparent 50%
-    );
+  background-image:
+    radial-gradient(circle at 20% 80%, rgba(120, 190, 150, 0.1) 0%, transparent 50%),
+    radial-gradient(circle at 80% 20%, rgba(90, 160, 120, 0.08) 0%, transparent 50%),
+    radial-gradient(circle at 40% 40%, rgba(140, 200, 160, 0.06) 0%, transparent 50%);
   pointer-events: none;
   z-index: -2;
 }
 
-/* 添加浮动装饰元素 */
 body::after {
-  content: "";
+  content: '';
   position: fixed;
   top: 0;
   left: 0;
@@ -75,7 +51,7 @@ body::after {
 @keyframes float {
   0%,
   100% {
-    transform: translateY(0px) rotate(0deg);
+    transform: translateY(0) rotate(0deg);
   }
   25% {
     transform: translateY(-10px) rotate(90deg);

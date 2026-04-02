@@ -1,30 +1,22 @@
 <template>
   <div class="main-layout">
-    <!-- 顶部导航栏 -->
     <header class="top-navbar">
       <div class="navbar-container">
-        <!-- Logo 区域 -->
         <div class="navbar-logo">
           <img src="@/assets/logo.png" alt="Logo" class="logo-img" />
           <span class="logo-text">Fruit Classify System</span>
         </div>
 
-        <!-- 右侧用户菜单或登录按钮 -->
         <div class="navbar-user">
-          <!-- 登录状态显示用户信息 -->
-          <el-dropdown 
+          <el-dropdown
             v-if="isLoggedIn"
-            trigger="click" 
+            trigger="click"
             placement="bottom-end"
             @command="handleUserCommand"
           >
             <div class="user-avatar-wrapper">
-              <el-avatar 
-                :size="36" 
-                :src="userAvatar"
-                class="user-avatar"
-              >
-                <img src="@/assets/default-avatar.png" alt="用户头像" />
+              <el-avatar :size="36" :src="userAvatar" class="user-avatar">
+                <img :src="defaultAvatar" alt="用户头像" />
               </el-avatar>
               <span class="user-name">{{ userName }}</span>
               <el-icon class="dropdown-arrow"><ArrowDown /></el-icon>
@@ -43,13 +35,12 @@
             </template>
           </el-dropdown>
 
-          <!-- 未登录状态显示登录按钮 -->
-          <el-button 
+          <el-button
             v-else
-            type="primary" 
-            size="small" 
-            @click="handleLoginClick"
+            type="primary"
+            size="small"
             class="login-button"
+            @click="handleLoginClick"
           >
             <el-icon><User /></el-icon>
             <span>登录</span>
@@ -58,21 +49,15 @@
       </div>
     </header>
 
-    <!-- 侧边栏导航 -->
-    <aside 
-      class="sidebar" 
+    <aside
+      class="sidebar"
       :class="{ 'sidebar-collapsed': isCollapsed }"
       @mouseenter="handleMouseEnter"
       @mouseleave="handleMouseLeave"
     >
-      <!-- 折叠/展开按钮 -->
       <div class="sidebar-toggle" @click="toggleSidebar">
-        <el-icon v-if="isCollapsed">
-          <Expand />
-        </el-icon>
-        <el-icon v-else>
-          <Fold />
-        </el-icon>
+        <el-icon v-if="isCollapsed"><Expand /></el-icon>
+        <el-icon v-else><Fold /></el-icon>
       </div>
 
       <el-menu
@@ -86,60 +71,50 @@
         :collapse-transition="false"
         class="sidebar-menu"
       >
-        <!-- 仪表盘 -->
         <el-menu-item index="/dashboard">
           <el-icon><HomeFilled /></el-icon>
           <span>仪表盘</span>
         </el-menu-item>
 
-        <!-- 目标检测（带子菜单） -->
         <el-sub-menu index="1">
           <template #title>
             <el-icon><Search /></el-icon>
             <span>目标检测</span>
           </template>
-          
-          <!-- 图片检测 -->
+
           <el-menu-item index="/detection/image">
             <el-icon><Picture /></el-icon>
             <span>图片检测</span>
           </el-menu-item>
 
-          <!-- 视频检测 -->
           <el-menu-item index="/detection/video">
             <el-icon><VideoPlay /></el-icon>
             <span>视频检测</span>
           </el-menu-item>
 
-          <!-- 实时检测 -->
           <el-menu-item index="/detection/realtime">
             <el-icon><Monitor /></el-icon>
-            <span>实时检测(连接摄像头)</span>
+            <span>实时检测</span>
           </el-menu-item>
+
           <el-menu-item index="/detection/diameter">
             <el-icon><Picture /></el-icon>
             <span>果径测量</span>
           </el-menu-item>
         </el-sub-menu>
 
-        <!-- 检测历史 -->
         <el-menu-item index="/history">
           <el-icon><Timer /></el-icon>
-          <span>检测历史(可查看...)</span>
+          <span>检测历史</span>
         </el-menu-item>
 
-        <!-- 个人中心（仅登录状态显示） -->
-        <el-menu-item 
-          index="/profile"
-          v-if="isLoggedIn"
-        >
+        <el-menu-item v-if="isLoggedIn" index="/profile">
           <el-icon><User /></el-icon>
           <span>个人中心</span>
         </el-menu-item>
       </el-menu>
     </aside>
 
-    <!-- 主内容区域 -->
     <main class="main-content" :class="{ 'content-expanded': isCollapsed }">
       <div class="content-wrapper">
         <router-view />
@@ -152,15 +127,31 @@
 import { defineComponent, ref, onMounted, computed, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { ElMessage } from 'element-plus'
-// 导入auth.js中的方法
-import { removeToken, removeUserId, getToken, getUserName, removeUserName } from '@/utils/auth'
-import { 
-  ElMenu, ElMenuItem, ElSubMenu, ElIcon, ElDropdown, ElDropdownMenu, ElDropdownItem, 
-  ElAvatar, ElButton
+import defaultAvatar from '@/assets/default-avatar.png'
+import { clearLoginState, getToken, getUserName, logout as logoutApi } from '@/utils/auth'
+import {
+  ElMenu,
+  ElMenuItem,
+  ElSubMenu,
+  ElIcon,
+  ElDropdown,
+  ElDropdownMenu,
+  ElDropdownItem,
+  ElAvatar,
+  ElButton
 } from 'element-plus'
-import { 
-  HomeFilled, Search, Picture, VideoPlay, 
-  Monitor, Timer, User, Expand, Fold, ArrowDown, SwitchButton
+import {
+  HomeFilled,
+  Search,
+  Picture,
+  VideoPlay,
+  Monitor,
+  Timer,
+  User,
+  Expand,
+  Fold,
+  ArrowDown,
+  SwitchButton
 } from '@element-plus/icons-vue'
 
 export default defineComponent({
@@ -190,60 +181,52 @@ export default defineComponent({
   setup() {
     const router = useRouter()
     const route = useRoute()
-    
-    // 响应式状态
+
     const isCollapsed = ref(true)
     const isHovering = ref(false)
-    const userAvatar = ref('@/assets/default-avatar.png')
-    const isLoggedIn = ref(false) // 登录状态标记
-    
-    // 计算当前路由用于菜单高亮
+    const userAvatar = ref(defaultAvatar)
+    const userName = ref('用户')
+    const isLoggedIn = ref(false)
+
     const currentRoute = computed(() => route.path)
 
-    // 获取用户名（使用getUserName方法）
-    const userName = ref('用户')
-    
-    // 检查登录状态
     const checkLoginStatus = () => {
       const token = getToken()
       isLoggedIn.value = !!token
-      
-      // 如果已登录，获取用户信息
-      if (isLoggedIn.value) {
-        // 优先使用getUserName获取用户名
-        const storedUserName = getUserName()
-        if (storedUserName) {
-          userName.value = storedUserName
-        } else {
-          // 如果getUserName获取不到，尝试从userInfo获取（兼容旧版本）
-          const userInfo = localStorage.getItem('userInfo')
-          if (userInfo) {
-            try {
-              const userData = JSON.parse(userInfo)
-              userName.value = userData.username || '用户'
-              // 如果有头像信息，更新头像
-              if (userData.avatar) {
-                userAvatar.value = userData.avatar
-              }
-            } catch (e) {
-              console.error('解析用户信息失败:', e)
-            }
+
+      if (!token) {
+        userName.value = '用户'
+        userAvatar.value = defaultAvatar
+        return
+      }
+
+      const storedUserName = getUserName()
+      if (storedUserName) {
+        userName.value = storedUserName
+      }
+
+      const userInfo = localStorage.getItem('userInfo')
+      if (userInfo) {
+        try {
+          const userData = JSON.parse(userInfo)
+          userName.value = userData.username || storedUserName || '用户'
+          if (userData.avatar) {
+            userAvatar.value = userData.avatar
           }
+        } catch (error) {
+          console.error('解析用户信息失败:', error)
         }
       }
     }
-    
-    // 初始化时检查登录状态
+
     onMounted(() => {
       checkLoginStatus()
-      
-      // 大屏幕默认展开侧边栏
+
       if (window.innerWidth >= 1200) {
         isCollapsed.value = false
       }
     })
 
-    // 监听路由变化，检查登录状态
     watch(
       () => route.path,
       () => {
@@ -251,7 +234,6 @@ export default defineComponent({
       }
     )
 
-    // 侧边栏切换方法
     const toggleSidebar = () => {
       isCollapsed.value = !isCollapsed.value
     }
@@ -264,34 +246,27 @@ export default defineComponent({
       isHovering.value = false
     }
 
-    // 处理登录按钮点击
     const handleLoginClick = () => {
       router.push('/login')
     }
 
-    // 用户菜单命令处理
-    const handleUserCommand = (command) => {
+    const handleUserCommand = async (command) => {
       switch (command) {
         case 'profile':
           router.push('/profile')
           break
         case 'logout':
-          // 清除token、userid和username
-          removeToken()
-          removeUserId()
-          removeUserName()
-          localStorage.removeItem('userInfo')
-          ElMessage.success('退出登录成功')
-          router.push('/login')
-          
-          // 更新登录状态
+          try {
+            await logoutApi()
+          } catch (_error) {
+            // 即使后端 session 已失效，也继续清理本地登录态。
+          }
+
+          clearLoginState()
           isLoggedIn.value = false
           userName.value = '用户'
-          
-          // 显示退出成功消息
-          ElMessage.success('退出登录成功')
-          
-          // 跳转到登录页面
+          userAvatar.value = defaultAvatar
+          ElMessage.success('已退出登录')
           router.push('/login')
           break
         default:
@@ -300,6 +275,7 @@ export default defineComponent({
     }
 
     return {
+      defaultAvatar,
       isCollapsed,
       isHovering,
       userAvatar,
@@ -325,7 +301,6 @@ export default defineComponent({
   transition: all 0.3s ease;
 }
 
-/* 顶部导航栏样式 */
 .top-navbar {
   height: 60px;
   background: linear-gradient(135deg, #304156 0%, #2c3e50 100%);
@@ -348,7 +323,6 @@ export default defineComponent({
   height: 100%;
 }
 
-/* Logo 区域样式 */
 .navbar-logo {
   display: flex;
   align-items: center;
@@ -374,7 +348,6 @@ export default defineComponent({
   background-clip: text;
 }
 
-/* 用户头像区域样式 */
 .navbar-user {
   display: flex;
   align-items: center;
@@ -409,7 +382,6 @@ export default defineComponent({
   transition: transform 0.3s ease;
 }
 
-/* 登录按钮样式 */
 .login-button {
   background-color: #1890ff;
   border-color: #1890ff;
@@ -426,45 +398,37 @@ export default defineComponent({
   border-color: #096dd9;
 }
 
-/* 下拉菜单激活时箭头旋转 */
 :deep(.el-dropdown.is-active) .dropdown-arrow {
   transform: rotate(180deg);
 }
 
-/* 侧边栏基础样式 - 与顶部导航栏配色统一 */
 .sidebar {
   width: 240px;
-  background-color: #304156; /* 与顶部导航栏起始色一致 */
-  /* 移除overflow-y: auto以取消滚动条 */
+  background-color: #304156;
   transition: all 0.3s ease;
   position: fixed;
-  top: 60px; /* 在顶部导航栏下方 */
+  top: 60px;
   bottom: 0;
   left: 0;
   z-index: 1000;
   box-shadow: 2px 0 8px rgba(0, 0, 0, 0.15);
 }
 
-/* 折叠状态下的侧边栏 */
 .sidebar-collapsed {
   width: 64px !important;
 }
 
-/* 侧边栏菜单 */
 .sidebar .el-menu {
   border-right: none;
-  height: calc(100% - 56px); /* 减去折叠按钮的高度 */
+  height: calc(100% - 56px);
   transition: all 0.3s ease;
-  /* 确保菜单不会出现滚动条 */
   overflow: hidden !important;
 }
 
-/* 折叠状态下隐藏菜单文字 */
 .sidebar-collapsed .el-menu:not(.el-menu--collapse) {
   width: 64px;
 }
 
-/* 折叠按钮样式 */
 .sidebar-toggle {
   height: 56px;
   display: flex;
@@ -486,7 +450,6 @@ export default defineComponent({
   transition: transform 0.3s ease;
 }
 
-/* 菜单项样式优化 */
 .sidebar-menu .el-menu-item,
 .sidebar-menu .el-sub-menu__title {
   height: 56px;
@@ -500,19 +463,17 @@ export default defineComponent({
   font-size: 18px;
 }
 
-/* 折叠状态下调整图标间距 */
 .sidebar-collapsed .el-menu-item .el-icon,
 .sidebar-collapsed .el-sub-menu__title .el-icon {
   margin-right: 0;
 }
 
-/* 主内容区域 */
 .main-content {
   flex: 1;
   overflow: hidden;
   transition: all 0.3s ease;
-  margin-top: 60px; /* 为顶部导航栏留出空间 */
-  margin-left: 64px; /* 默认折叠状态的侧边栏宽度 */
+  margin-top: 60px;
+  margin-left: 64px;
 }
 
 .content-wrapper {
@@ -522,12 +483,10 @@ export default defineComponent({
   transition: all 0.3s ease;
 }
 
-/* 侧边栏展开时调整主内容区域 */
 .sidebar:not(.sidebar-collapsed) + .main-content {
   margin-left: 240px;
 }
 
-/* 响应式设计 */
 @media (max-width: 768px) {
   .sidebar {
     width: 64px;
@@ -538,16 +497,16 @@ export default defineComponent({
     z-index: 1000;
     transform: translateX(0);
   }
-  
+
   .sidebar:not(.sidebar-collapsed) {
     width: 240px;
     box-shadow: 4px 0 16px rgba(0, 0, 0, 0.2);
   }
-  
+
   .main-content {
     margin-left: 64px;
   }
-  
+
   .content-wrapper {
     padding: 15px;
   }
@@ -565,7 +524,7 @@ export default defineComponent({
   .sidebar:not(.sidebar-collapsed) {
     width: 200px;
   }
-  
+
   .content-wrapper {
     padding: 10px;
   }
@@ -575,30 +534,27 @@ export default defineComponent({
   }
 
   .logo-text {
-    display: none; /* 在小屏幕上隐藏文字，只显示logo */
+    display: none;
   }
 }
 
-/* 大屏幕下的悬停效果 */
 @media (min-width: 769px) {
   .sidebar:hover:not(.sidebar-collapsed) {
     width: 240px;
   }
-  
-  /* 确保在非折叠状态下保持完整宽度 */
+
   .sidebar:not(.sidebar-collapsed) {
     width: 240px !important;
   }
 }
 
-/* 子菜单弹出框样式调整 - 与顶部导航栏配色协调 */
 :deep(.el-sub-menu .el-sub-menu__title) {
   display: flex;
   align-items: center;
 }
 
 :deep(.el-sub-menu .el-menu) {
-  background-color: #2c3e50 !important; /* 与顶部导航栏结束色一致 */
+  background-color: #2c3e50 !important;
 }
 
 :deep(.el-sub-menu .el-menu-item) {
@@ -607,37 +563,32 @@ export default defineComponent({
 }
 
 :deep(.el-sub-menu .el-menu-item:hover) {
-  background-color: #243447 !important; /* 更深的变体色 */
+  background-color: #243447 !important;
 }
 
-/* 菜单项悬停效果 */
 :deep(.el-menu-item:hover) {
-  background-color: #2c3e50 !important; /* 与顶部导航栏结束色一致 */
+  background-color: #2c3e50 !important;
 }
 
 :deep(.el-sub-menu__title:hover) {
   background-color: #2c3e50 !important;
 }
 
-/* 激活菜单项样式 - 使用Logo文字的金色调 */
 :deep(.el-menu-item.is-active) {
   background-color: #1890ff !important;
-  color: #ffd04b !important; /* 与Logo文字的金色一致 */
+  color: #ffd04b !important;
 }
 
-/* 折叠状态下的工具提示 */
 :deep(.el-tooltip__trigger) {
   display: flex;
   align-items: center;
   justify-content: center;
 }
 
-/* 确保在折叠状态下子菜单弹出位置正确 */
 :deep(.el-popper) {
   margin-left: 4px !important;
 }
 
-/* 下拉菜单样式优化 */
 :deep(.el-dropdown-menu) {
   border: none;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -656,7 +607,7 @@ export default defineComponent({
 
 :deep(.el-dropdown-menu__item .el-icon) {
   font-size: 16px;
-  color: #304156; /* 使用侧边栏主色 */
+  color: #304156;
 }
 
 :deep(.el-dropdown-menu__item:hover) {

@@ -4,7 +4,7 @@
       <el-col :span="24">
         <div class="profile-header">
           <h1>个人中心</h1>
-          <p>管理您的个人信息和账户设置</p>
+          <p>管理您的个人信息和账户安全设置。</p>
         </div>
       </el-col>
     </el-row>
@@ -15,31 +15,40 @@
           <template #header>
             <div class="card-header">
               <span>个人信息</span>
-              <el-button type="primary" size="small" @click="showEditDialog" v-if="!isEditing">编辑信息</el-button>
+              <el-button
+                v-if="!isEditing"
+                type="primary"
+                size="small"
+                @click="showEditDialog"
+              >
+                编辑信息
+              </el-button>
             </div>
           </template>
-          
-          <!-- 用户信息展示 -->
-          <div class="user-info" v-if="!isEditing && userInfo">
+
+          <div v-if="!isEditing && userInfo" class="user-info">
             <el-descriptions :column="1" border>
-              <el-descriptions-item label="用户ID">{{ userInfo.id }}</el-descriptions-item>
+              <el-descriptions-item label="用户 ID">{{ userInfo.id }}</el-descriptions-item>
               <el-descriptions-item label="用户名">{{ userInfo.username }}</el-descriptions-item>
-              <el-descriptions-item label="昵称">{{ userInfo.first_name || '未设置' }}</el-descriptions-item>
-              <el-descriptions-item label="邮箱">{{ userInfo.email || '未设置' }}</el-descriptions-item>
+              <el-descriptions-item label="昵称">
+                {{ userInfo.first_name || '未设置' }}
+              </el-descriptions-item>
+              <el-descriptions-item label="邮箱">
+                {{ userInfo.email || '未设置' }}
+              </el-descriptions-item>
             </el-descriptions>
           </div>
-          
-          <!-- 编辑表单（仅支持 first_name 和 email） -->
-          <div class="edit-form" v-if="isEditing">
-            <el-form 
-              :model="editForm" 
-              :rules="editRules" 
-              ref="editFormRef" 
+
+          <div v-if="isEditing" class="edit-form">
+            <el-form
+              ref="editFormRef"
+              :model="editForm"
+              :rules="editRules"
               label-width="80px"
               label-position="left"
             >
               <el-form-item label="用户名" prop="username">
-                <el-input v-model="editForm.username" :disabled="true"></el-input>
+                <el-input v-model="editForm.username" disabled></el-input>
               </el-form-item>
               <el-form-item label="昵称" prop="first_name">
                 <el-input v-model="editForm.first_name"></el-input>
@@ -48,15 +57,16 @@
                 <el-input v-model="editForm.email"></el-input>
               </el-form-item>
               <el-form-item>
-                <el-button type="primary" @click="submitEditForm" :loading="editLoading">保存</el-button>
+                <el-button type="primary" :loading="editLoading" @click="submitEditForm">
+                  保存
+                </el-button>
                 <el-button @click="cancelEdit">取消</el-button>
               </el-form-item>
             </el-form>
           </div>
         </el-card>
       </el-col>
-      
-      <!-- 安全信息卡片 -->
+
       <el-col :span="8">
         <el-card class="info-sidebar" shadow="hover">
           <template #header>
@@ -67,29 +77,41 @@
           <div class="security-info">
             <div class="security-item">
               <span>修改密码</span>
-              <el-button type="primary" size="small" @click="showPasswordDialog">修改密码</el-button>
+              <el-button type="primary" size="small" @click="showPasswordDialog">
+                修改密码
+              </el-button>
             </div>
           </div>
         </el-card>
       </el-col>
     </el-row>
 
-    <!-- 修改密码弹窗 -->
-    <el-dialog title="修改密码" v-model="passwordDialogVisible" width="400px">
-      <el-form :model="passwordForm" :rules="passwordRules" ref="passwordFormRef" label-width="80px">
+    <el-dialog v-model="passwordDialogVisible" title="修改密码" width="400px">
+      <el-form
+        ref="passwordFormRef"
+        :model="passwordForm"
+        :rules="passwordRules"
+        label-width="90px"
+      >
         <el-form-item label="旧密码" prop="oldPassword">
-          <el-input type="password" v-model="passwordForm.oldPassword"></el-input>
+          <el-input v-model="passwordForm.oldPassword" type="password" show-password></el-input>
         </el-form-item>
         <el-form-item label="新密码" prop="newPassword">
-          <el-input type="password" v-model="passwordForm.newPassword"></el-input>
+          <el-input v-model="passwordForm.newPassword" type="password" show-password></el-input>
         </el-form-item>
-        <el-form-item label="确认新密码" prop="confirmPassword">
-          <el-input type="password" v-model="passwordForm.confirmPassword"></el-input>
+        <el-form-item label="确认密码" prop="confirmPassword">
+          <el-input
+            v-model="passwordForm.confirmPassword"
+            type="password"
+            show-password
+          ></el-input>
         </el-form-item>
       </el-form>
       <template #footer>
         <el-button @click="passwordDialogVisible = false">取消</el-button>
-        <el-button type="primary" @click="submitPasswordChange" :loading="passwordLoading">确定</el-button>
+        <el-button type="primary" :loading="passwordLoading" @click="submitPasswordChange">
+          确定
+        </el-button>
       </template>
     </el-dialog>
   </div>
@@ -97,12 +119,21 @@
 
 <script>
 import { defineComponent, ref, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { getCurrentUserInfo, updateUserInfo, changePassword } from '@/utils/auth'
+import {
+  changePassword,
+  clearLoginState,
+  getCurrentUserInfo,
+  storeLoginState,
+  updateUserInfo
+} from '@/utils/auth'
 
 export default defineComponent({
   name: 'UserProfileView',
   setup() {
+    const router = useRouter()
+
     const userInfo = ref(null)
     const isEditing = ref(false)
     const editLoading = ref(false)
@@ -118,7 +149,7 @@ export default defineComponent({
     })
 
     const editRules = {
-      email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: 'blur' }]
+      email: [{ type: 'email', message: '请输入正确的邮箱地址', trigger: ['blur', 'change'] }]
     }
 
     const passwordForm = ref({
@@ -131,40 +162,47 @@ export default defineComponent({
       oldPassword: [{ required: true, message: '请输入旧密码', trigger: 'blur' }],
       newPassword: [
         { required: true, message: '请输入新密码', trigger: 'blur' },
-        { min: 6, message: '密码长度至少6位', trigger: 'blur' }
+        { min: 6, message: '密码长度至少 6 位', trigger: 'blur' }
       ],
       confirmPassword: [
         { required: true, message: '请确认新密码', trigger: 'blur' },
-        { validator: (rule, value, callback) => {
-          if (value !== passwordForm.value.newPassword) {
-            callback(new Error('两次输入的密码不一致'))
-          } else {
+        {
+          validator: (_rule, value, callback) => {
+            if (value !== passwordForm.value.newPassword) {
+              callback(new Error('两次输入的密码不一致'))
+              return
+            }
             callback()
-          }
-        }, trigger: 'blur' }
+          },
+          trigger: ['blur', 'change']
+        }
       ]
+    }
+
+    const syncEditForm = () => {
+      if (!userInfo.value) {
+        return
+      }
+
+      editForm.value.username = userInfo.value.username
+      editForm.value.first_name = userInfo.value.first_name || ''
+      editForm.value.email = userInfo.value.email || ''
     }
 
     const fetchUserInfo = async () => {
       try {
         const res = await getCurrentUserInfo()
-        if (res) {
-          userInfo.value = res
-          syncEditForm()
-        } else {
+        if (!res) {
           ElMessage.error('获取用户信息失败')
+          return
         }
-      } catch (err) {
-        console.error(err)
-        ElMessage.error('获取用户信息失败')
-      }
-    }
 
-    const syncEditForm = () => {
-      if (userInfo.value) {
-        editForm.value.username = userInfo.value.username
-        editForm.value.first_name = userInfo.value.first_name || ''
-        editForm.value.email = userInfo.value.email || ''
+        userInfo.value = res
+        storeLoginState(res)
+        syncEditForm()
+      } catch (error) {
+        console.error(error)
+        ElMessage.error('获取用户信息失败')
       }
     }
 
@@ -179,29 +217,32 @@ export default defineComponent({
     }
 
     const submitEditForm = async () => {
-      if (editFormRef.value) {
-        await editFormRef.value.validate(async (valid) => {
-          if (valid) {
-            editLoading.value = true
-            try {
-              const res = await updateUserInfo({
-                first_name: editForm.value.first_name,
-                email: editForm.value.email
-              })
-              if (res.status === 'success') {
-                ElMessage.success('个人信息更新成功')
-                isEditing.value = false
-                await fetchUserInfo()  // 重新获取最新信息
-              } else {
-                ElMessage.error(res.error || '更新失败')
-              }
-            } catch (err) {
-              ElMessage.error('更新失败')
-            } finally {
-              editLoading.value = false
-            }
-          }
+      const valid = await editFormRef.value?.validate().catch(() => false)
+      if (!valid) {
+        return
+      }
+
+      editLoading.value = true
+      try {
+        const res = await updateUserInfo({
+          first_name: editForm.value.first_name,
+          email: editForm.value.email
         })
+
+        if (res?.status === 'success') {
+          userInfo.value = res.user
+          storeLoginState(res.user)
+          syncEditForm()
+          isEditing.value = false
+          ElMessage.success('个人信息更新成功')
+          return
+        }
+
+        ElMessage.error(res?.error || '更新失败')
+      } catch (_error) {
+        ElMessage.error('更新失败，请稍后重试')
+      } finally {
+        editLoading.value = false
       }
     }
 
@@ -211,31 +252,31 @@ export default defineComponent({
     }
 
     const submitPasswordChange = async () => {
-      if (passwordFormRef.value) {
-        await passwordFormRef.value.validate(async (valid) => {
-          if (valid) {
-            passwordLoading.value = true
-            try {
-              const res = await changePassword({
-                old_password: passwordForm.value.oldPassword,
-                new_password: passwordForm.value.newPassword
-              })
-              if (res.status === 'success') {
-                ElMessage.success('密码修改成功，请重新登录')
-                setTimeout(() => {
-                  window.location.href = '/login'
-                }, 2000)
-              } else {
-                ElMessage.error(res.error || '密码修改失败')
-              }
-            } catch (err) {
-              ElMessage.error('密码修改失败')
-            } finally {
-              passwordLoading.value = false
-              passwordDialogVisible.value = false
-            }
-          }
+      const valid = await passwordFormRef.value?.validate().catch(() => false)
+      if (!valid) {
+        return
+      }
+
+      passwordLoading.value = true
+      try {
+        const res = await changePassword({
+          old_password: passwordForm.value.oldPassword,
+          new_password: passwordForm.value.newPassword
         })
+
+        if (res?.status === 'success') {
+          clearLoginState()
+          passwordDialogVisible.value = false
+          ElMessage.success('密码修改成功，请重新登录')
+          await router.replace('/login')
+          return
+        }
+
+        ElMessage.error(res?.error || '密码修改失败')
+      } catch (_error) {
+        ElMessage.error('密码修改失败，请稍后重试')
+      } finally {
+        passwordLoading.value = false
       }
     }
 
@@ -264,3 +305,51 @@ export default defineComponent({
   }
 })
 </script>
+
+<style scoped>
+.profile-container {
+  padding: 8px;
+}
+
+.profile-header {
+  margin-bottom: 20px;
+  text-align: left;
+}
+
+.profile-header h1 {
+  margin: 0 0 8px;
+  font-size: 28px;
+  color: #304156;
+}
+
+.profile-header p {
+  margin: 0;
+  color: #5f8276;
+}
+
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.user-info,
+.edit-form,
+.security-info {
+  text-align: left;
+}
+
+.security-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+@media (max-width: 768px) {
+  .profile-header h1 {
+    font-size: 24px;
+  }
+}
+</style>

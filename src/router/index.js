@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
-import { getToken } from '@/utils/auth'  
+import { getToken } from '@/utils/auth'
+
 const routes = [
   {
     path: '/',
@@ -57,7 +58,7 @@ const routes = [
       {
         path: '/about',
         name: 'about',
-        component: () => import(/* webpackChunkName: "about" */ '../views/AboutView.vue')
+        component: () => import('../views/AboutView.vue')
       }
     ]
   }
@@ -68,15 +69,20 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
-  const token = getToken()   // 使用统一的 getToken
+router.beforeEach((to, _from, next) => {
+  const token = getToken()
+
   if (to.path === '/login' && token) {
     next('/dashboard')
-  } else if (to.path !== '/login' && !token && to.path !== '/register') {
-    next('/login')
-  } else {
-    next()
+    return
   }
+
+  if (to.path !== '/login' && to.path !== '/register' && !token) {
+    next('/login')
+    return
+  }
+
+  next()
 })
 
 export default router

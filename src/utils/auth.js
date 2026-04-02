@@ -1,6 +1,5 @@
 import request from '@/utils/request.js'
 
-// 登录
 export function login(params) {
   return request({
     url: '/api/login/',
@@ -9,7 +8,6 @@ export function login(params) {
   })
 }
 
-// 注册
 export function register(params) {
   return request({
     url: '/api/register/',
@@ -18,7 +16,13 @@ export function register(params) {
   })
 }
 
-// 获取当前用户信息
+export function logout() {
+  return request({
+    url: '/api/logout/',
+    method: 'post'
+  })
+}
+
 export function getCurrentUserInfo() {
   return request({
     url: '/api/user_info/',
@@ -26,7 +30,6 @@ export function getCurrentUserInfo() {
   })
 }
 
-// 修改用户信息（仅支持 first_name 和 email）
 export function updateUserInfo(params) {
   return request({
     url: '/api/update_profile/',
@@ -35,7 +38,6 @@ export function updateUserInfo(params) {
   })
 }
 
-// 修改密码
 export function changePassword(params) {
   return request({
     url: '/api/change_password/',
@@ -44,7 +46,6 @@ export function changePassword(params) {
   })
 }
 
-// 模拟 token 存储（用于前端路由守卫）
 export function setToken(token) {
   localStorage.setItem('token', token)
 }
@@ -79,4 +80,26 @@ export function getUserName() {
 
 export function removeUserName() {
   localStorage.removeItem('userName')
+}
+
+export function storeLoginState(user) {
+  setToken('logged_in')
+
+  if (!user) {
+    removeUserId()
+    removeUserName()
+    localStorage.removeItem('userInfo')
+    return
+  }
+
+  setUserId(String(user.id ?? ''))
+  setUserName(user.username || '')
+  localStorage.setItem('userInfo', JSON.stringify(user))
+}
+
+export function clearLoginState() {
+  removeToken()
+  removeUserId()
+  removeUserName()
+  localStorage.removeItem('userInfo')
 }

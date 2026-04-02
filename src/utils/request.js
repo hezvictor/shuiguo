@@ -1,76 +1,74 @@
-// src/utils/request.js
 import axios from 'axios'
 import { getToken } from '@/utils/auth.js'
 
-// 直接从 cookie 获取 csrftoken
 function getCookie(name) {
-  let cookieValue = null;
+  let cookieValue = null
   if (document.cookie && document.cookie !== '') {
-    const cookies = document.cookie.split(';');
-    for (let i = 0; i < cookies.length; i++) {
-      const cookie = cookies[i].trim();
-      if (cookie.substring(0, name.length + 1) === (name + '=')) {
-        cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
-        break;
+    const cookies = document.cookie.split(';')
+    for (let i = 0; i < cookies.length; i += 1) {
+      const cookie = cookies[i].trim()
+      if (cookie.substring(0, name.length + 1) === `${name}=`) {
+        cookieValue = decodeURIComponent(cookie.substring(name.length + 1))
+        break
       }
     }
   }
-  return cookieValue;
+  return cookieValue
 }
 
-// 开发环境下使用代理，baseURL 设为空，请求将发送到当前域名（Vite dev server）
-// 生产环境可改为实际后端地址（如 /api 或完整 URL）
-const serverUrl = ''   
-
 const request = axios.create({
-  baseURL: serverUrl,   
+  baseURL: '',
   timeout: 30000,
-  withCredentials: true           // 允许携带 cookie
+  withCredentials: true
 })
 
-// 拦截器等其他代码保持不变
-request.interceptors.request.use(config => {
-  const csrftoken = getCookie('csrftoken');
-  if (csrftoken) {
-    config.headers['X-CSRFToken'] = csrftoken;
-  }
-  const token = getToken();
-  if (token) {
-    config.headers['token'] = token;
-  }
-  return config
-}, error => {
-  console.error('request error:' + error)
-  return Promise.reject(error)
-})
+request.interceptors.request.use(
+  (config) => {
+    const csrftoken = getCookie('csrftoken')
+    if (csrftoken) {
+      config.headers['X-CSRFToken'] = csrftoken
+    }
 
-// src/utils/request.js
+    const token = getToken()
+    if (token) {
+      config.headers.token = token
+    }
+
+    return config
+  },
+  (error) => Promise.reject(error)
+)
+
 request.interceptors.response.use(
-  response => {
-    // 如果响应类型是 blob，直接返回
+  (response) => {
     if (response.config.responseType === 'blob') {
       return response.data
     }
-    let res = response.data;
-    if (response.headers['content-type'] && response.headers['content-type'].includes('image')) {
-      return res;
+
+    if (response.headers['content-type']?.includes('image')) {
+      return response.data
     }
-    if (typeof res === 'string') {
-      res = res ? JSON.parse(res) : res
+
+    const payload = response.data
+    if (typeof payload === 'string') {
+      try {
+        return payload ? JSON.parse(payload) : payload
+      } catch (_error) {
+        return payload
+      }
     }
-    return res
+
+    return payload
   },
-  error => {
-    // 错误处理保持不变
-    if (error.response && error.response.status === 401) {
-      import('@/utils/auth').then(({ removeToken, removeUserId, removeUserName }) => {
-        removeToken()
-        removeUserId()
-        removeUserName()
-        localStorage.removeItem('userInfo')
+  async (error) => {
+    if (error.response?.status === 401) {
+      const { clearLoginState } = await import('@/utils/auth')
+      clearLoginState()
+      if (window.location.pathname !== '/login') {
         window.location.href = '/login'
-      })
+      }
     }
+
     return Promise.reject(error)
   }
 )
