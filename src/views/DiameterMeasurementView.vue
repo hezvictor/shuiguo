@@ -13,6 +13,7 @@
           <el-button plain :loading="statusLoading" @click="loadStatus">刷新相机状态</el-button>
           <el-button plain type="warning" :loading="probing" @click="probeCameras">扫描索引</el-button>
           <el-button plain type="info" :loading="runtimeLoading" @click="loadRuntimeStatus">刷新运行时</el-button>
+          <el-button plain type="primary" @click="usageDialogVisible = true">使用说明</el-button>
         </div>
       </section>
 
@@ -94,6 +95,9 @@
                   @click="measureCurrentFrame"
                 >
                   测量当前帧
+                </el-button>
+                <el-button plain type="info" @click="usageDialogVisible = true">
+                  查看使用说明
                 </el-button>
               </div>
             </el-form>
@@ -402,6 +406,56 @@
         </div>
       </section>
     </div>
+
+    <el-dialog
+      v-model="usageDialogVisible"
+      title="果径测量使用说明"
+      width="720px"
+      class="usage-dialog"
+      destroy-on-close
+    >
+      <div class="usage-dialog__body">
+        <p>
+          这个页面用于用双目相机抓取当前画面，并自动估计水果的横向直径。第一次使用时，按下面的顺序操作即可。
+        </p>
+
+        <section class="usage-block">
+          <h3>怎么用</h3>
+          <ol>
+            <li>先把双目摄像头接好，确认左右画面都正常，水果能同时出现在两个镜头里。</li>
+            <li>根据你的设备选择输入模式：如果是一台相机输出左右拼接画面，选“单设备双目”；如果是两台相机分别拍摄，选“双设备双目”。</li>
+            <li>点击“启动摄像头”，先看实时预览，确认画面清晰、没有明显卡顿，水果没有被裁掉。</li>
+            <li>把水果放在镜头前，尽量让水果位于画面中间，避免离镜头太近或太远。</li>
+            <li>如果当前设备还没有完成标定，先采集棋盘格并执行双目标定；已经标定过则可直接测量。</li>
+            <li>保持水果和相机短暂稳定，然后点击“测量当前帧”。</li>
+            <li>等待结果返回后，在“测量结果”区域查看每个水果的果径数值。通常单位是毫米，数值越大表示果径越大。</li>
+          </ol>
+        </section>
+
+        <section class="usage-block">
+          <h3>结果怎么看</h3>
+          <ul>
+            <li>如果画面里检测到多个水果，系统会分别给出每个目标的测量结果。</li>
+            <li>如果提示没有检测到水果，通常是水果没有完整进入画面，或者当前角度、光照不适合识别。</li>
+            <li>如果结果波动较大，先检查相机是否晃动、左右画面是否对齐，以及水果边缘是否清晰。</li>
+          </ul>
+        </section>
+
+        <section class="usage-block">
+          <h3>简短原理</h3>
+          <p>
+            系统会先利用双目图像恢复水果与相机之间的空间深度，再识别出水果在图像中的位置，最后在水果左右边缘之间计算真实空间距离，把这个距离作为果径估计值。
+          </p>
+          <p>
+            可以简单理解为：先看出“水果在哪里、离相机多远”，再把图像里的宽度换算成现实中的宽度。
+          </p>
+        </section>
+
+        <div class="usage-tip">
+          为了更容易测准：尽量使用稳定光照、保持镜头清洁、让水果正对镜头，并优先把水果放在画面中央区域。
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -443,6 +497,7 @@ export default {
       previewError: '',
       previewManualClose: false,
       previewReconnectTimer: null,
+      usageDialogVisible: false,
       errorMessage: '',
       measurementResult: null,
       resultImageUrl: '',
@@ -1197,6 +1252,48 @@ export default {
   border-radius: 20px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.usage-dialog__body {
+  color: #26453b;
+  line-height: 1.8;
+}
+
+.usage-dialog__body p {
+  margin: 0 0 14px;
+}
+
+.usage-block {
+  margin-top: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, #f8fbfa 0%, #eef5f1 100%);
+  border: 1px solid rgba(36, 84, 70, 0.08);
+}
+
+.usage-block h3 {
+  margin: 0 0 10px;
+  font-size: 16px;
+  color: #173b32;
+}
+
+.usage-block ol,
+.usage-block ul {
+  margin: 0;
+  padding-left: 22px;
+}
+
+.usage-block li {
+  margin-bottom: 8px;
+}
+
+.usage-tip {
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  color: #7c4a03;
 }
 
 @media (max-width: 1180px) {
