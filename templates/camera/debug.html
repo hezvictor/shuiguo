@@ -1,0 +1,369 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>双目摄像头调试</title>
+    <style>
+        @font-face {
+            font-family: 'AppSimHei';
+            src: url("{% static 'fonts/simhei.ttf' %}") format('truetype');
+            font-display: swap;
+        }
+
+        :root {
+            --bg: #0f172a;
+            --panel: #111827;
+            --panel-alt: #1f2937;
+            --text: #e5e7eb;
+            --muted: #9ca3af;
+            --accent: #f59e0b;
+            --danger: #ef4444;
+            --ok: #10b981;
+            --font-ui: 'AppSimHei', 'SimHei', sans-serif;
+        }
+
+        * { box-sizing: border-box; }
+
+        body {
+            margin: 0;
+            font-family: var(--font-ui);
+            background:
+                radial-gradient(circle at top left, rgba(245, 158, 11, 0.18), transparent 28%),
+                linear-gradient(135deg, var(--bg), #020617);
+            color: var(--text);
+        }
+
+        input,
+        select,
+        button,
+        textarea {
+            font-family: var(--font-ui);
+        }
+
+        .page {
+            max-width: 1280px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        .grid {
+            display: grid;
+            gap: 20px;
+            grid-template-columns: 360px 1fr;
+        }
+
+        .card {
+            background: rgba(17, 24, 39, 0.92);
+            border: 1px solid rgba(156, 163, 175, 0.15);
+            border-radius: 20px;
+            overflow: hidden;
+            backdrop-filter: blur(12px);
+        }
+
+        .card h1,
+        .card h2 {
+            margin: 0;
+            padding: 20px 20px 0;
+            font-weight: 700;
+        }
+
+        .card p {
+            padding: 0 20px;
+            color: var(--muted);
+        }
+
+        .panel-body {
+            padding: 20px;
+        }
+
+        .fields {
+            display: grid;
+            gap: 12px;
+        }
+
+        label {
+            display: grid;
+            gap: 6px;
+            font-size: 14px;
+        }
+
+        input, select, button {
+            border: 1px solid rgba(156, 163, 175, 0.2);
+            border-radius: 12px;
+            padding: 10px 12px;
+            font-size: 14px;
+        }
+
+        input, select {
+            background: var(--panel-alt);
+            color: var(--text);
+        }
+
+        button {
+            cursor: pointer;
+            font-weight: 600;
+        }
+
+        .primary { background: var(--accent); color: #111827; }
+        .ghost { background: transparent; color: var(--text); }
+        .danger { background: var(--danger); color: #fff; }
+        .ok { background: var(--ok); color: #052e16; }
+
+        .button-row {
+            display: grid;
+            gap: 10px;
+            grid-template-columns: repeat(2, 1fr);
+        }
+
+        .button-row.full {
+            grid-template-columns: 1fr;
+        }
+
+        .preview-wrap {
+            padding: 20px;
+        }
+
+        .preview-frame {
+            width: 100%;
+            min-height: 420px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #020617;
+            border-radius: 16px;
+            overflow: hidden;
+            border: 1px solid rgba(156, 163, 175, 0.12);
+        }
+
+        .preview-frame img {
+            display: block;
+            width: 100%;
+            height: auto;
+        }
+
+        .status, .result {
+            white-space: pre-wrap;
+            font-family: var(--font-ui), Consolas, monospace;
+            font-size: 13px;
+            background: rgba(2, 6, 23, 0.65);
+            border-radius: 14px;
+            padding: 14px;
+            border: 1px solid rgba(156, 163, 175, 0.12);
+        }
+
+        .inline-check {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        @media (max-width: 960px) {
+            .grid { grid-template-columns: 1fr; }
+            .preview-frame { min-height: 280px; }
+        }
+    </style>
+</head>
+<body>
+<div class="page">
+    <div class="grid">
+        <section class="card">
+            <h1>双目摄像头调试</h1>
+            <p>先在这里确认摄像头能打开、双目画面能显示，再继续接前端正式页面。</p>
+            <div class="panel-body">
+                <div class="fields">
+                    <label>
+                        输入模式
+                        <select id="sourceMode">
+                            <option value="single">单设备双目（左右拼接）</option>
+                            <option value="dual">双设备双摄</option>
+                        </select>
+                    </label>
+                    <label>
+                        单设备 camera_index
+                        <input id="cameraIndex" type="number" value="0" min="0">
+                    </label>
+                    <label>
+                        左摄像头 left_camera_index
+                        <input id="leftCameraIndex" type="number" value="0" min="0">
+                    </label>
+                    <label>
+                        右摄像头 right_camera_index
+                        <input id="rightCameraIndex" type="number" value="1" min="0">
+                    </label>
+                    <label>
+                        split_mode
+                        <select id="splitMode">
+                            <option value="left_right">left_right</option>
+                            <option value="top_bottom">top_bottom</option>
+                        </select>
+                    </label>
+                    <label>
+                        宽度（可选）
+                        <input id="frameWidth" type="number" min="1" placeholder="例如 2560">
+                    </label>
+                    <label>
+                        高度（可选）
+                        <input id="frameHeight" type="number" min="1" placeholder="例如 720">
+                    </label>
+                    <label>
+                        FPS（可选）
+                        <input id="fps" type="number" min="1" max="120" placeholder="例如 30">
+                    </label>
+                    <label class="inline-check">
+                        <input id="detectToggle" type="checkbox">
+                        预览时叠加 YOLO 框
+                    </label>
+                </div>
+
+                <div class="button-row" style="margin-top: 16px;">
+                    <button class="primary" id="startBtn">启动摄像头</button>
+                    <button class="danger" id="stopBtn">停止摄像头</button>
+                </div>
+                <div class="button-row full" style="margin-top: 10px;">
+                    <button class="ok" id="measureBtn">抓取当前双目帧并测果径</button>
+                </div>
+
+                <h2 style="padding-left: 0; padding-top: 24px;">状态</h2>
+                <div class="status" id="statusBox">等待启动</div>
+
+                <h2 style="padding-left: 0; padding-top: 24px;">测量结果</h2>
+                <div class="result" id="resultBox">尚未测量</div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>实时预览</h2>
+            <p>启动成功后，这里会显示左右相机拼接画面。</p>
+            <div class="preview-wrap">
+                <div class="preview-frame">
+                    <img id="previewImage" alt="camera preview">
+                </div>
+            </div>
+        </section>
+    </div>
+</div>
+
+<script>
+    const urls = {
+        stream: "{{ camera_stream_url }}",
+        status: "{{ camera_status_url }}",
+        start: "{{ camera_start_url }}",
+        stop: "{{ camera_stop_url }}",
+        measure: "{{ camera_measure_url }}"
+    };
+
+    function getCookie(name) {
+        const value = `; ${document.cookie}`;
+        const parts = value.split(`; ${name}=`);
+        if (parts.length === 2) {
+            return parts.pop().split(';').shift();
+        }
+        return '';
+    }
+
+    function numberValue(id) {
+        const raw = document.getElementById(id).value.trim();
+        return raw === '' ? undefined : Number(raw);
+    }
+
+    function currentStreamUrl() {
+        const detect = document.getElementById('detectToggle').checked ? '1' : '0';
+        return `${urls.stream}?detect=${detect}&_ts=${Date.now()}`;
+    }
+
+    async function apiFetch(url, options = {}) {
+        const response = await fetch(url, {
+            credentials: 'same-origin',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': getCookie('csrftoken')
+            },
+            ...options
+        });
+        const data = await response.json();
+        if (!response.ok) {
+            throw new Error(data.error || `HTTP ${response.status}`);
+        }
+        return data;
+    }
+
+    function setStatus(data) {
+        document.getElementById('statusBox').textContent = JSON.stringify(data, null, 2);
+    }
+
+    function setResult(data) {
+        document.getElementById('resultBox').textContent = JSON.stringify(data, null, 2);
+    }
+
+    async function loadStatus() {
+        try {
+            const data = await fetch(urls.status, { credentials: 'same-origin' }).then(r => r.json());
+            setStatus(data);
+            if (data.active) {
+                document.getElementById('previewImage').src = currentStreamUrl();
+            }
+        } catch (error) {
+            setStatus({ status: 'error', error: error.message });
+        }
+    }
+
+    document.getElementById('startBtn').addEventListener('click', async () => {
+        const payload = {
+            source_mode: document.getElementById('sourceMode').value,
+            camera_index: numberValue('cameraIndex'),
+            left_camera_index: numberValue('leftCameraIndex'),
+            right_camera_index: numberValue('rightCameraIndex'),
+            split_mode: document.getElementById('splitMode').value,
+            frame_width: numberValue('frameWidth'),
+            frame_height: numberValue('frameHeight'),
+            fps: numberValue('fps')
+        };
+        Object.keys(payload).forEach(key => payload[key] === undefined && delete payload[key]);
+
+        try {
+            const data = await apiFetch(urls.start, {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+            setStatus(data);
+            document.getElementById('previewImage').src = currentStreamUrl();
+        } catch (error) {
+            setStatus({ status: 'error', error: error.message });
+        }
+    });
+
+    document.getElementById('stopBtn').addEventListener('click', async () => {
+        try {
+            const data = await apiFetch(urls.stop, { method: 'POST', body: '{}' });
+            setStatus(data);
+            document.getElementById('previewImage').removeAttribute('src');
+        } catch (error) {
+            setStatus({ status: 'error', error: error.message });
+        }
+    });
+
+    document.getElementById('measureBtn').addEventListener('click', async () => {
+        try {
+            const data = await apiFetch(urls.measure, {
+                method: 'POST',
+                body: JSON.stringify({ conf: 0.25, save_vis: true })
+            });
+            setResult(data);
+        } catch (error) {
+            setResult({ status: 'error', error: error.message });
+        }
+    });
+
+    document.getElementById('detectToggle').addEventListener('change', () => {
+        const image = document.getElementById('previewImage');
+        if (image.getAttribute('src')) {
+            image.src = currentStreamUrl();
+        }
+    });
+
+    loadStatus();
+</script>
+</body>
+</html>

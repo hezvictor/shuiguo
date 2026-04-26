@@ -1,0 +1,2 @@
+#!/usr/bin/env sh
+python scripts/git/check_large_files.py

@@ -1,0 +1,482 @@
+from __future__ import annotations
+
+import os
+import threading
+import time
+from dataclasses import asdict, dataclass
+from itertools import combinations
+from typing import Dict, Generator, List, Optional, Tuple
+
+import numpy as np
+from PIL import Image
+
+
+class CameraDependencyError(Exception):
+    pass
+
+
+class CameraOpenError(Exception):
+    pass
+
+
+class CameraStateError(Exception):
+    pass
+
+
+def _require_cv2():
+    try:
+        import cv2  # type: ignore
+    except ImportError as exc:
+        raise CameraDependencyError("opencv-python is required for camera access") from exc
+    return cv2
+
+
+@dataclass
+class StereoCameraConfig:
+    source_mode: str = "single"
+    camera_index: int = 0
+    left_camera_index: int = 0
+    right_camera_index: int = 1
+    frame_width: Optional[int] = None
+    frame_height: Optional[int] = None
+    fps: Optional[int] = None
+    split_mode: str = "left_right"
+    backend: Optional[str] = "CAP_DSHOW" if os.name == "nt" else None
+
+    def to_payload(self) -> Dict[str, Optional[int]]:
+        return asdict(self)
+
+
+class StereoCameraService:
+    OPEN_WARMUP_FRAMES = 8
+    OPEN_WARMUP_DELAY = 0.05
+    READ_RETRIES = 5
+    READ_RETRY_DELAY = 0.03
+    STREAM_RETRY_DELAY = 0.2
+    PREVIEW_FAILURE_LIMIT = 2
+    PREVIEW_JPEG_QUALITY = 80
+
+    def __init__(self, default_config: Optional[Dict] = None):
+        config_payload = dict(default_config or {})
+        self._default_config = StereoCameraConfig(**config_payload)
+        self._active_config = StereoCameraConfig(**self._default_config.to_payload())
+        self._single_capture = None
+        self._left_capture = None
+        self._right_capture = None
+        self._lock = threading.RLock()
+        self._is_running = False
+        self._last_open_error: Optional[str] = None
+        self._last_stream_error: Optional[str] = None
+        self._last_frame_ts: Optional[float] = None
+        self._consecutive_failures = 0
+
+    @staticmethod
+    def _backend_flag(config: StereoCameraConfig) -> int:
+        cv2 = _require_cv2()
+        if not config.backend:
+            return cv2.CAP_ANY
+        return getattr(cv2, config.backend, cv2.CAP_ANY)
+
+    @staticmethod
+    def _backend_name_candidates(config: StereoCameraConfig) -> List[str]:
+        requested = (config.backend or "").strip()
+        candidates: List[str] = [requested] if requested else ["CAP_ANY"]
+        if os.name == "nt":
+            for name in ("CAP_DSHOW", "CAP_MSMF", "CAP_ANY"):
+                if name not in candidates:
+                    candidates.append(name)
+        return candidates
+
+    @staticmethod
+    def _backend_flag_by_name(backend_name: str) -> int:
+        cv2 = _require_cv2()
+        if not backend_name or backend_name == "CAP_ANY":
+            return cv2.CAP_ANY
+        return getattr(cv2, backend_name, cv2.CAP_ANY)
+
+    @staticmethod
+    def _apply_capture_options(capture, config: StereoCameraConfig) -> None:
+        cv2 = _require_cv2()
+        if config.frame_width:
+            capture.set(cv2.CAP_PROP_FRAME_WIDTH, int(config.frame_width))
+        if config.frame_height:
+            capture.set(cv2.CAP_PROP_FRAME_HEIGHT, int(config.frame_height))
+        if config.fps:
+            capture.set(cv2.CAP_PROP_FPS, int(config.fps))
+        if hasattr(cv2, "CAP_PROP_BUFFERSIZE"):
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    @staticmethod
+    def _has_visible_signal(frame: np.ndarray) -> bool:
+        return bool(frame.size > 0 and int(frame.max()) > 0)
+
+    def _open_capture(self, camera_index: int, config: StereoCameraConfig):
+        cv2 = _require_cv2()
+        errors: List[str] = []
+
+        for backend_name in self._backend_name_candidates(config):
+            backend_flag = self._backend_flag_by_name(backend_name)
+            capture = cv2.VideoCapture(int(camera_index), backend_flag)
+            if not capture.isOpened():
+                capture.release()
+                errors.append(f"{backend_name}: open failed")
+                continue
+
+            self._apply_capture_options(capture, config)
+            usable = False
+            for _ in range(self.OPEN_WARMUP_FRAMES):
+                ok, frame = capture.read()
+                if ok and frame is not None and frame.size > 0 and self._has_visible_signal(frame):
+                    usable = True
+                    break
+                time.sleep(self.OPEN_WARMUP_DELAY)
+
+            if usable:
+                return capture
+
+            capture.release()
+            errors.append(f"{backend_name}: opened but no visible frame")
+
+        detail = "; ".join(errors) if errors else "unknown error"
+        raise CameraOpenError(f"unable to open camera index {camera_index} ({detail})")
+
+    @staticmethod
+    def _read_frame(capture, camera_label: str) -> np.ndarray:
+        last_error = f"unable to read frame from {camera_label}"
+        for attempt in range(StereoCameraService.READ_RETRIES):
+            ok, frame = capture.read()
+            if ok and frame is not None and frame.size > 0:
+                if StereoCameraService._has_visible_signal(frame) or attempt == StereoCameraService.READ_RETRIES - 1:
+                    return frame
+                last_error = f"received empty-looking frame from {camera_label}"
+            else:
+                last_error = f"unable to read frame from {camera_label}"
+            time.sleep(StereoCameraService.READ_RETRY_DELAY)
+        raise CameraOpenError(last_error)
+
+    @staticmethod
+    def _split_single_frame(frame: np.ndarray, split_mode: str) -> Tuple[np.ndarray, np.ndarray]:
+        height, width = frame.shape[:2]
+        if split_mode == "top_bottom":
+            midpoint = max(1, height // 2)
+            left = frame[:midpoint, :]
+            right = frame[midpoint:, :]
+        else:
+            midpoint = max(1, width // 2)
+            left = frame[:, :midpoint]
+            right = frame[:, midpoint:]
+
+        if left.size == 0 or right.size == 0:
+            raise CameraOpenError("failed to split stereo frame; check split_mode and camera output format")
+        return left, right
+
+    @staticmethod
+    def _resize_to_match(left: np.ndarray, right: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        if left.shape[:2] == right.shape[:2]:
+            return left, right
+        cv2 = _require_cv2()
+        target_size = (left.shape[1], left.shape[0])
+        resized = cv2.resize(right, target_size, interpolation=cv2.INTER_LINEAR)
+        return left, resized
+
+    @staticmethod
+    def _draw_label(frame: np.ndarray, text: str, color: Tuple[int, int, int]) -> None:
+        cv2 = _require_cv2()
+        cv2.rectangle(frame, (8, 8), (220, 38), color, -1)
+        cv2.putText(frame, text, (16, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2, cv2.LINE_AA)
+
+    @staticmethod
+    def _draw_detections(frame: np.ndarray, yolo_model, conf: float) -> None:
+        cv2 = _require_cv2()
+        results = yolo_model.predict(
+            source=Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)),
+            conf=conf,
+            save=False,
+            verbose=False,
+        )
+        if not results:
+            return
+        result = results[0]
+        boxes = result.boxes
+        if boxes is None or len(boxes) == 0:
+            return
+
+        for index, box in enumerate(boxes):
+            x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
+            cls_id = int(box.cls[0].item())
+            label = result.names.get(cls_id, str(cls_id))
+            score = float(box.conf[0].item())
+            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(
+                frame,
+                f"{index + 1}. {label} {score:.2f}",
+                (x1, max(24, y1 - 8)),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
+
+    def open(self, config: Optional[StereoCameraConfig] = None) -> Dict:
+        effective = config or self._default_config
+        with self._lock:
+            self.close()
+            try:
+                if effective.source_mode == "dual":
+                    self._left_capture = self._open_capture(effective.left_camera_index, effective)
+                    try:
+                        self._right_capture = self._open_capture(effective.right_camera_index, effective)
+                    except Exception:
+                        self._left_capture.release()
+                        self._left_capture = None
+                        raise
+                    self._read_frame(self._left_capture, "left camera")
+                    self._read_frame(self._right_capture, "right camera")
+                else:
+                    self._single_capture = self._open_capture(effective.camera_index, effective)
+                    frame = self._read_frame(self._single_capture, "stereo camera")
+                    self._split_single_frame(frame, effective.split_mode)
+            except Exception as exc:
+                self._last_open_error = str(exc)
+                self.close()
+                raise
+
+            self._active_config = StereoCameraConfig(**effective.to_payload())
+            self._is_running = True
+            self._last_open_error = None
+            self._last_frame_ts = time.time()
+            return self.status()
+
+    def close(self) -> None:
+        with self._lock:
+            for attr_name in ("_single_capture", "_left_capture", "_right_capture"):
+                capture = getattr(self, attr_name)
+                if capture is not None:
+                    try:
+                        capture.release()
+                    finally:
+                        setattr(self, attr_name, None)
+            self._is_running = False
+
+    def ensure_open(self) -> None:
+        with self._lock:
+            if self._is_running:
+                return
+        self.open()
+
+    def read_stereo_frames(self) -> Tuple[np.ndarray, np.ndarray, Dict]:
+        self.ensure_open()
+        with self._lock:
+            config = self._active_config
+            if config.source_mode == "dual":
+                if self._left_capture is None or self._right_capture is None:
+                    raise CameraStateError("camera is not active")
+                left = self._read_frame(self._left_capture, "left camera")
+                right = self._read_frame(self._right_capture, "right camera")
+            else:
+                if self._single_capture is None:
+                    raise CameraStateError("camera is not active")
+                frame = self._read_frame(self._single_capture, "stereo camera")
+                left, right = self._split_single_frame(frame, config.split_mode)
+
+            left, right = self._resize_to_match(left, right)
+            self._last_frame_ts = time.time()
+            return left, right, self.status()
+
+    def render_preview_frame(self, *, detect: bool = False, yolo_model=None, conf: float = 0.25) -> np.ndarray:
+        cv2 = _require_cv2()
+        left, right, status = self.read_stereo_frames()
+        left_preview = left.copy()
+        right_preview = right.copy()
+        self._draw_label(left_preview, "LEFT", (80, 220, 255))
+        self._draw_label(right_preview, "RIGHT", (80, 220, 255))
+
+        if detect and yolo_model is not None:
+            self._draw_detections(left_preview, yolo_model, conf)
+
+        preview = np.concatenate([left_preview, right_preview], axis=1)
+        mid_x = left_preview.shape[1]
+        cv2.line(preview, (mid_x, 0), (mid_x, preview.shape[0]), (255, 255, 255), 2)
+        footer = (
+            f"mode={status['config']['source_mode']} "
+            f"split={status['config']['split_mode']} "
+            f"time={time.strftime('%H:%M:%S')}"
+        )
+        cv2.putText(
+            preview,
+            footer,
+            (16, max(32, preview.shape[0] - 16)),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (255, 255, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        return preview
+
+    @staticmethod
+    def _encode_mjpeg_chunk(frame_bytes: bytes) -> bytes:
+        return (
+            b"--frame\r\n"
+            b"Content-Type: image/jpeg\r\n\r\n" + frame_bytes + b"\r\n"
+        )
+
+    def _encode_error_jpeg(self, message: str) -> bytes:
+        cv2 = _require_cv2()
+        canvas = np.zeros((480, 1280, 3), dtype=np.uint8)
+        canvas[:] = (20, 20, 20)
+        title = "Stereo camera preview unavailable"
+        lines = [title, message[:120] or "unknown error"]
+        if len(message) > 120:
+            lines.append(message[120:240])
+        for index, line in enumerate(lines):
+            cv2.putText(
+                canvas,
+                line,
+                (32, 80 + index * 42),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.9 if index == 0 else 0.7,
+                (0, 200, 255) if index == 0 else (255, 255, 255),
+                2,
+                cv2.LINE_AA,
+            )
+        ok, encoded = cv2.imencode(".jpg", canvas, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+        if not ok:
+            raise CameraStateError("failed to encode preview error frame")
+        return encoded.tobytes()
+
+    def encode_preview_jpeg(self, *, detect: bool = False, yolo_model=None, conf: float = 0.25) -> bytes:
+        cv2 = _require_cv2()
+        frame = self.render_preview_frame(detect=detect, yolo_model=yolo_model, conf=conf)
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), self.PREVIEW_JPEG_QUALITY])
+        if not ok:
+            raise CameraStateError("failed to encode preview frame")
+        return encoded.tobytes()
+
+    def record_preview_success(self) -> None:
+        with self._lock:
+            self._last_stream_error = None
+            self._consecutive_failures = 0
+
+    def record_preview_failure(self, message: str) -> None:
+        with self._lock:
+            self._last_open_error = message
+            self._last_stream_error = message
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= self.PREVIEW_FAILURE_LIMIT:
+                self.close()
+
+    def mjpeg_stream(self, *, detect: bool = False, yolo_model=None, conf: float = 0.25) -> Generator[bytes, None, None]:
+        while True:
+            try:
+                frame_bytes = self.encode_preview_jpeg(detect=detect, yolo_model=yolo_model, conf=conf)
+                self.record_preview_success()
+            except (CameraDependencyError, CameraOpenError, CameraStateError) as exc:
+                self.record_preview_failure(str(exc))
+                frame_bytes = self._encode_error_jpeg(str(exc))
+                yield self._encode_mjpeg_chunk(frame_bytes)
+                time.sleep(self.STREAM_RETRY_DELAY)
+                continue
+
+            yield self._encode_mjpeg_chunk(frame_bytes)
+            time.sleep(0.03)
+
+    def status(self) -> Dict:
+        return {
+            "active": self._is_running,
+            "config": self._active_config.to_payload(),
+            "last_open_error": self._last_open_error,
+            "last_stream_error": self._last_stream_error,
+            "last_frame_ts": self._last_frame_ts,
+            "consecutive_failures": self._consecutive_failures,
+        }
+
+
+def probe_camera_indices(max_index: int = 4, backend: Optional[str] = None) -> Dict[str, object]:
+    cv2 = _require_cv2()
+    effective_backend = backend or ("CAP_DSHOW" if os.name == "nt" else None)
+    config = StereoCameraConfig(backend=effective_backend)
+    backend_flag = StereoCameraService._backend_flag(config)
+
+    results: List[Dict[str, object]] = []
+    for camera_index in range(max(0, int(max_index))):
+        capture = cv2.VideoCapture(camera_index, backend_flag)
+        opened = bool(capture is not None and capture.isOpened())
+        info: Dict[str, object] = {
+            "camera_index": camera_index,
+            "opened": opened,
+            "backend": effective_backend or "CAP_ANY",
+        }
+        if opened:
+            ok, frame = capture.read()
+            info["read_ok"] = bool(ok and frame is not None)
+            if ok and frame is not None:
+                height, width = frame.shape[:2]
+                info["frame_width"] = int(width)
+                info["frame_height"] = int(height)
+            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+            if fps > 0:
+                info["fps"] = round(fps, 3)
+        results.append(info)
+        if capture is not None:
+            capture.release()
+
+    opened_results = [item for item in results if item["opened"]]
+    pair_results: List[Dict[str, object]] = []
+    opened_indices = [int(item["camera_index"]) for item in opened_results]
+    for left_index, right_index in combinations(opened_indices, 2):
+        left_capture = cv2.VideoCapture(left_index, backend_flag)
+        right_capture = cv2.VideoCapture(right_index, backend_flag)
+        pair_info: Dict[str, object] = {
+            "left_camera_index": left_index,
+            "right_camera_index": right_index,
+            "backend": effective_backend or "CAP_ANY",
+            "left_opened": bool(left_capture is not None and left_capture.isOpened()),
+            "right_opened": bool(right_capture is not None and right_capture.isOpened()),
+            "simultaneous_ok": False,
+        }
+        if pair_info["left_opened"] and pair_info["right_opened"]:
+            left_ok, left_frame = left_capture.read()
+            right_ok, right_frame = right_capture.read()
+            pair_info["left_read_ok"] = bool(left_ok and left_frame is not None)
+            pair_info["right_read_ok"] = bool(right_ok and right_frame is not None)
+            pair_info["simultaneous_ok"] = bool(
+                pair_info["left_read_ok"] and pair_info["right_read_ok"]
+            )
+            if left_ok and left_frame is not None:
+                left_h, left_w = left_frame.shape[:2]
+                pair_info["left_frame_width"] = int(left_w)
+                pair_info["left_frame_height"] = int(left_h)
+            if right_ok and right_frame is not None:
+                right_h, right_w = right_frame.shape[:2]
+                pair_info["right_frame_width"] = int(right_w)
+                pair_info["right_frame_height"] = int(right_h)
+        pair_results.append(pair_info)
+        left_capture.release()
+        right_capture.release()
+
+    successful_pairs = [item for item in pair_results if item["simultaneous_ok"]]
+    return {
+        "backend": effective_backend or "CAP_ANY",
+        "max_index": int(max_index),
+        "results": results,
+        "pair_results": pair_results,
+        "opened_count": len(opened_results),
+        "recommended_dual_pair": [
+            successful_pairs[0]["left_camera_index"],
+            successful_pairs[0]["right_camera_index"],
+        ]
+        if successful_pairs
+        else None,
+    }
+
+
+_camera_service: Optional[StereoCameraService] = None
+
+
+def get_stereo_camera_service(default_config: Optional[Dict] = None) -> StereoCameraService:
+    global _camera_service
+    if _camera_service is None:
+        _camera_service = StereoCameraService(default_config=default_config)
+    return _camera_service

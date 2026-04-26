@@ -1,13 +1,80 @@
-import torch
+﻿import torch
 import torch.nn as nn
 import timm
 from PIL import Image
 from torchvision import transforms
 import os
+import sys
+import threading
 from pathlib import Path
 from django.apps import AppConfig
-from ultralytics import YOLO
 from django.conf import settings
+from django.contrib.auth import get_user_model
+from django.db.utils import OperationalError, ProgrammingError
+
+
+MANAGEMENT_COMMANDS_WITHOUT_MODEL_LOADING = {
+    'check',
+    'collectstatic',
+    'createsuperuser',
+    'dbshell',
+    'makemigrations',
+    'migrate',
+    'shell',
+    'showmigrations',
+    'test',
+}
+
+
+def should_skip_model_loading():
+    if os.environ.get('SKIP_MODEL_LOADING') == '1':
+        return True
+    if len(sys.argv) < 2:
+        return False
+    return sys.argv[1] in MANAGEMENT_COMMANDS_WITHOUT_MODEL_LOADING
+
+
+def ensure_default_dev_superuser():
+    """Create a predictable local admin user for development if it is missing."""
+    if not settings.DEBUG:
+        return
+    if os.environ.get('AUTO_CREATE_DEV_USER', '1') != '1':
+        return
+
+    username = os.environ.get('DEV_ADMIN_USERNAME', 'admin')
+    password = os.environ.get('DEV_ADMIN_PASSWORD', 'admin123456')
+    email = os.environ.get('DEV_ADMIN_EMAIL', 'admin@example.com')
+
+    User = get_user_model()
+
+    try:
+        user, created = User.objects.get_or_create(
+            username=username,
+            defaults={
+                'email': email,
+                'is_staff': True,
+                'is_superuser': True,
+            },
+        )
+    except (OperationalError, ProgrammingError):
+        return
+
+    changed = created
+    if email and user.email != email:
+        user.email = email
+        changed = True
+    if not user.is_staff:
+        user.is_staff = True
+        changed = True
+    if not user.is_superuser:
+        user.is_superuser = True
+        changed = True
+    if not user.check_password(password):
+        user.set_password(password)
+        changed = True
+
+    if changed:
+        user.save()
 
 # ==========================================
 # 模型结构定义（必须与训练时完全一致）
@@ -83,8 +150,32 @@ class LoginAppConfig(AppConfig):
     default_auto_field = 'django.db.models.BigAutoField'
     name = 'fruit_api'
 
-    def ready(self):
-        # 从配置中获取模型路径
+    def _reset_runtime_state(self):
+        self.fruit_class_names = []
+        self.fruit_model = None
+        self.fruit_preprocess = None
+        self.mango_model = None
+        self.banana_model = None
+        self.strawberry_model = None
+        self.yolo_model = None
+        self.ripeness_preprocess = None
+        self.RIPENESS_SUPPORTED = {}
+        self.device = torch.device('cpu')
+        self._models_loaded = False
+        self._model_loading_error = None
+        self._model_lock = threading.Lock()
+
+    def _prepare_runtime_dirs(self):
+        # Keep Ultralytics runtime files inside the project so local startup
+        # does not depend on user-profile permissions.
+        yolo_config_dir = Path(settings.BASE_DIR) / '.yolo'
+        yolo_config_dir.mkdir(parents=True, exist_ok=True)
+        os.environ.setdefault('YOLO_CONFIG_DIR', str(yolo_config_dir))
+
+    def _load_models(self):
+        from ultralytics import YOLO
+
+        # 浠庨厤缃腑鑾峰彇妯″瀷璺緞
         model_base = settings.MODEL_CONFIG['BASE_DIR']
         fruit_model_path = model_base / settings.MODEL_CONFIG['FRUIT_MODEL']
         mango_path = model_base / settings.MODEL_CONFIG['MANGO_MODEL']
@@ -97,11 +188,11 @@ class LoginAppConfig(AppConfig):
 
         # ---------- 水果分类模型（EfficientNet） ----------
         import torchvision.models as models
-        self.fruit_model = models.efficientnet_b3(weights=models.EfficientNet_B3_Weights.DEFAULT)
+        self.fruit_model = models.efficientnet_b3(weights=None)
         num_ftrs = self.fruit_model.classifier[1].in_features
         self.fruit_model.classifier = nn.Sequential(
             nn.Dropout(p=0.5, inplace=True),
-            nn.Linear(num_ftrs, len(self.fruit_class_names))  # 输出类别数等于列表长度
+            nn.Linear(num_ftrs, len(self.fruit_class_names))  # 输出类别数等于类别列表长度
         )
         self.fruit_model.load_state_dict(torch.load(fruit_model_path, map_location=torch.device('cpu')))
         self.fruit_model.eval()
@@ -119,19 +210,19 @@ class LoginAppConfig(AppConfig):
         self.mango_model = MobileViT_Plus(num_classes=2)
         self.mango_model.load_state_dict(torch.load(mango_path, map_location='cpu'))
         self.mango_model.eval()
-        self.mango_classes = ['Ripe (熟芒果 🥭)', 'Unripe (生芒果 🍏)']
+        self.mango_classes = ['Ripe (成熟芒果)', 'Unripe (生芒果)']
 
         # ---------- 香蕉熟度模型 ----------
         self.banana_model = MobileViT_Plus(num_classes=2)
         self.banana_model.load_state_dict(torch.load(banana_path, map_location='cpu'))
         self.banana_model.eval()
-        self.banana_classes = ['Ripe (熟香蕉)', 'Unripe (生香蕉)']
+        self.banana_classes = ['Ripe (成熟香蕉)', 'Unripe (生香蕉)']
 
         # ---------- 草莓熟度模型 ----------
         self.strawberry_model = MobileViT_Plus(num_classes=3)
         self.strawberry_model.load_state_dict(torch.load(strawberry_path, map_location='cpu'))
         self.strawberry_model.eval()
-        self.strawberry_classes = ['Half Ripe (半熟 🍓偏白/粉)', 'Ripe (全熟 🍓红透)', 'Unripe (生果 🍏纯青)']
+        self.strawberry_classes = ['Half Ripe (半熟草莓)', 'Ripe (全熟草莓)', 'Unripe (生草莓)']
 
         # 通用预处理（熟度模型共用）
         ripe_prep = settings.MODEL_CONFIG['PREPROCESS']['RIPENESS']
@@ -148,15 +239,40 @@ class LoginAppConfig(AppConfig):
         self.banana_model.to(self.device)
         self.strawberry_model.to(self.device)
 
-        # YOLO模型
+        # YOLO妯″瀷
         self.yolo_model = YOLO(yolo_path)
         self.RIPENESS_SUPPORTED = settings.MODEL_CONFIG['RIPENESS_SUPPORTED']
+        self._models_loaded = True
+        self._model_loading_error = None
+
+    def ensure_models_loaded(self):
+        if self._models_loaded:
+            return
+
+        with self._model_lock:
+            if self._models_loaded:
+                return
+            try:
+                self._load_models()
+            except Exception as exc:
+                self._model_loading_error = exc
+                raise RuntimeError(f'模型加载失败: {exc}') from exc
+
+    def ready(self):
+        self._reset_runtime_state()
+        self._prepare_runtime_dirs()
+        ensure_default_dev_superuser()
+
+        # Management commands such as migrate/createsuperuser should not depend
+        # on AI model files or third-party runtime side effects.
+        if should_skip_model_loading():
+            return
 
     def get_ripeness_info(self, fruit_name):
         """
         根据水果名称返回对应的熟度模型和类别列表。
-        参数 fruit_name: 水果名称（中文，如'芒果'）
-        返回: (model, classes) 或 (None, None) 如果不支持
+        参数 fruit_name: 水果名称（中文，例如“芒果”）。
+        返回: (model, classes)；如果不支持则返回 (None, None)。
         """
         supported = settings.MODEL_CONFIG['RIPENESS_SUPPORTED']
         if fruit_name in supported:
@@ -165,3 +281,4 @@ class LoginAppConfig(AppConfig):
             classes = getattr(self, info['classes_attr'])
             return model, classes
         return None, None
+

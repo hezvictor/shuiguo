@@ -1,0 +1,89 @@
+# ------------------------------
+# Python / Django
+# ------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+
+.Python
+.python-version
+.venv/
+venv/
+env/
+ENV/
+.env.local
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Django runtime artifacts
+media/
+media/video_input/
+media/video_output/
+media/reports/
+media/diameter_tmp/
+media/tmp/
+test_media/
+.yolo/
+
+# ------------------------------
+# Build / logs / temp
+# ------------------------------
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+
+# ------------------------------
+# IDE / OS
+# ------------------------------
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# ------------------------------
+# Frontend artifacts (if present in this repo)
+# ------------------------------
+node_modules/
+dist/
+.pnpm-store/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+public/fonts/
+
+# ------------------------------
+# AI model weights / large binary artifacts
+# Default: do not commit heavy binaries.
+# Keep source code under model/monster_runtime tracked.
+# ------------------------------
+*.pt
+*.pth
+*.onnx
+*.engine
+*.bin
+*.ckpt
+*.safetensors
+*.npz
+
+# ------------------------------
+# Generated project reports/docs (optional working docs)
+# ------------------------------
+开发进度报告*.md
+项目现状分析与按模块开发清单*.md
+联调验收清单*.md
+分层开发规范*.md
+构建运行启动指南*.md
+
+# Keep core docs
+!README.md
