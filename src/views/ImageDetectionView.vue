@@ -1,172 +1,241 @@
 <template>
-  <div class="image-detection">
-    <div class="container">
-      <h1>图片水果识别系统</h1>
+  <div class="image-page">
+    <div class="page-shell">
+      <section class="hero">
+        <div class="hero-copy">
+          <p class="eyebrow">Image Detection Workspace</p>
+          <h1>图片检测</h1>
+          <p class="hero-text">
+            上传一张水果图片，点击“开始检测”，系统会先圈出所有识别目标；再勾选你关心的水果，生成更详细的分类与成熟度报告。
+          </p>
+        </div>
 
-      <!-- 上传区域 -->
-      <div class="upload-section">
-        <div
-          class="upload-area"
-          :class="{ 'drag-over': dragOver }"
-          @drop="onDrop"
-          @dragover="onDragOver"
-          @dragleave="onDragLeave"
-          @click="triggerFileInput"
-        >
-          <div class="upload-content">
-            <i class="upload-icon">📁</i>
-            <p class="upload-text">点击选择图片或拖拽图片到这里</p>
-            <p class="upload-hint">支持 JPG、PNG 格式，最大 5MB</p>
+        <div class="hero-status">
+          <div class="hero-badge">{{ selectedFile ? `当前文件：${selectedFile.name}` : '等待上传图片' }}</div>
+          <div class="hero-badge">{{ targetsList.length ? `已检测 ${targetsList.length} 个目标` : '尚未检测' }}</div>
+          <div class="hero-badge">{{ reportData ? '报告已生成' : '报告未生成' }}</div>
+        </div>
+      </section>
+
+      <section class="guide-strip">
+        <article class="guide-step">
+          <span class="guide-index">1</span>
+          <div>
+            <h3>上传图片</h3>
+            <p>支持 JPG、PNG 等常见格式，拖拽或点击上传都可以。</p>
           </div>
-          <input
-            ref="fileInput"
-            type="file"
-            accept="image/*"
-            @change="onFileSelected"
-            style="display: none"
-          />
-        </div>
+        </article>
+        <article class="guide-step">
+          <span class="guide-index">2</span>
+          <div>
+            <h3>开始检测</h3>
+            <p>系统会先识别图片中的水果，并在画面里标出检测框。</p>
+          </div>
+        </article>
+        <article class="guide-step">
+          <span class="guide-index">3</span>
+          <div>
+            <h3>勾选并生成报告</h3>
+            <p>选择要分析的目标后生成报告，查看分类、成熟度和详情。</p>
+          </div>
+        </article>
+      </section>
 
-        <div class="upload-controls">
-          <button
-            @click="triggerFileInput"
-            class="btn btn-primary"
-            :disabled="isProcessing"
-          >
-            <span v-if="isProcessing">处理中...</span>
-            <span v-else>选择图片</span>
-          </button>
-          <button
-            @click="detectImage"
-            class="btn btn-success"
-            :disabled="!selectedFile || isProcessing"
-          >
-            {{ isProcessing ? '检测中...' : '开始检测' }}
-          </button>
-          <button @click="clearAll" class="btn btn-secondary" :disabled="isProcessing">
-            清空
-          </button>
-        </div>
+      <div v-if="errorMessage" class="error-banner">
+        <strong>处理失败</strong>
+        <span>{{ errorMessage }}</span>
       </div>
 
-      <!-- 图片展示区域 -->
-      <div v-if="selectedFile" class="image-section">
-        <div class="image-comparison">
-          <!-- 原图 + Canvas 绘制区域 -->
-          <div class="image-container canvas-container">
-            <h3>检测结果 <span v-if="selectedTargets.length > 0" class="highlight-badge">已选中 {{ selectedTargets.length }} 个目标</span></h3>
-            <div class="image-wrapper canvas-wrapper">
-              <canvas
-                ref="resultCanvas"
-                class="result-canvas"
-                :style="{ width: canvasWidth + 'px', height: canvasHeight + 'px' }"
-              ></canvas>
-              <div v-if="!targetsList.length && !isProcessing" class="no-image">等待检测结果</div>
-              <div v-if="isProcessing" class="processing-overlay">
-                <div class="spinner"></div>
-                <span>检测中...</span>
+      <section class="workspace-grid">
+        <div class="workspace-main">
+          <section class="panel-card upload-card">
+            <div class="panel-header">
+              <div>
+                <h2>上传与检测</h2>
+                <p>先上传图片，再执行检测。支持拖拽上传。</p>
               </div>
             </div>
-            <div v-if="targetsList.length > 0" class="image-info">
-              共检测到 {{ targetsList.length }} 个目标 | 处理时间: {{ processingTime }}ms
-            </div>
-          </div>
-        </div>
 
-        <!-- 目标列表（带复选框，点击时高亮对应框） -->
-        <div v-if="targetsList.length > 0" class="targets-section">
-          <div class="targets-header">
-            <h3>检测到的目标</h3>
-            <div class="select-all">
-              <input type="checkbox" id="selectAll" v-model="selectAll" @change="onSelectAllChange" />
-              <label for="selectAll">全选 ({{ targetsList.length }})</label>
-            </div>
-          </div>
-          <div class="targets-list">
             <div
-              v-for="(target, idx) in targetsList"
-              :key="idx"
-              class="target-item"
-              :class="{ 'target-selected': selectedTargets.includes(idx) }"
-              @click="toggleTargetSelection(idx)"
+              class="upload-area"
+              :class="{ 'drag-over': dragOver }"
+              @drop="onDrop"
+              @dragover="onDragOver"
+              @dragleave="onDragLeave"
+              @click="triggerFileInput"
             >
+              <div class="upload-content">
+                <span class="upload-icon">◫</span>
+                <p class="upload-text">点击选择图片或将图片拖到这里</p>
+                <p class="upload-hint">支持 JPG / PNG，建议不超过 5MB</p>
+              </div>
               <input
-                type="checkbox"
-                :value="idx"
-                v-model="selectedTargets"
-                @click.stop
-                @change="onTargetSelectionChange"
-                class="target-checkbox"
+                ref="fileInput"
+                type="file"
+                accept="image/*"
+                @change="onFileSelected"
+                style="display: none"
               />
-              <span class="target-label">
-                {{ target.label }}
-                <span class="confidence-badge">{{ (target.confidence * 100).toFixed(1) }}%</span>
-              </span>
-              <span class="target-bbox">框: [{{ target.bbox.join(',') }}]</span>
             </div>
-          </div>
-          <div class="report-actions">
-            <button
-              @click="generateReport"
-              class="btn btn-primary"
-              :disabled="isGeneratingReport || selectedTargets.length === 0"
-            >
-              {{ isGeneratingReport ? '生成中...' : `生成报告 (${selectedTargets.length}个目标)` }}
-            </button>
-          </div>
+
+            <div class="action-row">
+              <button @click="triggerFileInput" class="btn btn-primary" :disabled="isProcessing">
+                <span v-if="isProcessing">处理中...</span>
+                <span v-else>选择图片</span>
+              </button>
+              <button @click="detectImage" class="btn btn-success" :disabled="!selectedFile || isProcessing">
+                {{ isProcessing ? '检测中...' : '开始检测' }}
+              </button>
+              <button @click="clearAll" class="btn btn-secondary" :disabled="isProcessing">
+                清空
+              </button>
+            </div>
+
+            <div v-if="selectedFile" class="file-meta-card">
+              <span>文件名：{{ selectedFile.name }}</span>
+              <span>处理时间：{{ processingTime || 0 }} ms</span>
+              <span>目标数量：{{ targetsList.length }}</span>
+            </div>
+          </section>
+
+          <section class="panel-card canvas-card">
+            <div class="panel-header">
+              <div>
+                <h2>检测画面</h2>
+                <p>蓝色高亮表示你当前选中的目标。</p>
+              </div>
+              <span v-if="selectedTargets.length" class="panel-badge">已选 {{ selectedTargets.length }} 个目标</span>
+            </div>
+
+            <div v-if="selectedFile" class="canvas-stage">
+              <div class="image-wrapper canvas-wrapper">
+                <canvas
+                  ref="resultCanvas"
+                  class="result-canvas"
+                  :style="{ width: canvasWidth + 'px', height: canvasHeight + 'px' }"
+                ></canvas>
+                <div v-if="!targetsList.length && !isProcessing" class="empty-overlay">等待检测结果</div>
+                <div v-if="isProcessing" class="processing-overlay">
+                  <div class="spinner"></div>
+                  <span>检测中...</span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-card-state">
+              <h3>等待上传图片</h3>
+              <p>上传图片后，这里会展示检测框和高亮结果。</p>
+            </div>
+          </section>
         </div>
 
-        <!-- 报告展示区域 -->
-        <div v-if="reportData" class="report-section">
-          <h3>检测报告</h3>
-          <div class="report-content">
-            <table class="report-table">
-              <thead>
-                <tr>
-                  <th>序号</th>
-                  <th>框坐标</th>
-                  <th>水果分类</th>
-                  <th>分类置信度</th>
-                  <th>成熟度</th>
-                  <th>成熟度置信度</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(item, idx) in reportData.targets" :key="idx">
-                  <td>{{ idx + 1 }}</td>
-                  <td>[{{ item.bbox.join(',') }}]</td>
-                  <td>{{ item.fruit_classification.class }}</td>
-                  <td>{{ (item.fruit_classification.confidence * 100).toFixed(1) }}%</td>
-                  <td>{{ item.ripeness ? item.ripeness.predicted_class : '不适用' }}</td>
-                  <td>{{ item.ripeness ? (item.ripeness.confidence * 100).toFixed(1) + '%' : '-' }}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <div class="download-report">
-            <button @click="downloadReportAsHtml" class="btn btn-success">下载报告（HTML）</button>
-          </div>
+        <div class="workspace-side">
+          <section class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2>目标列表</h2>
+                <p>点击整行或复选框都可以选择目标。</p>
+              </div>
+              <div v-if="targetsList.length" class="select-all">
+                <input type="checkbox" id="selectAll" v-model="selectAll" @change="onSelectAllChange" />
+                <label for="selectAll">全选 ({{ targetsList.length }})</label>
+              </div>
+            </div>
+
+            <div v-if="targetsList.length" class="targets-list">
+              <div
+                v-for="(target, idx) in targetsList"
+                :key="idx"
+                class="target-item"
+                :class="{ 'target-selected': selectedTargets.includes(idx) }"
+                @click="toggleTargetSelection(idx)"
+              >
+                <input
+                  type="checkbox"
+                  :value="idx"
+                  v-model="selectedTargets"
+                  @click.stop
+                  @change="onTargetSelectionChange"
+                  class="target-checkbox"
+                />
+                <div class="target-copy">
+                  <span class="target-label">
+                    {{ target.label }}
+                    <span class="confidence-badge">{{ (target.confidence * 100).toFixed(1) }}%</span>
+                  </span>
+                  <span class="target-bbox">框坐标 [{{ target.bbox.join(', ') }}]</span>
+                </div>
+              </div>
+            </div>
+            <div v-else class="empty-inline-tip">
+              先完成检测，右侧会列出识别到的水果目标。
+            </div>
+
+            <div class="report-actions">
+              <button
+                @click="generateReport"
+                class="btn btn-primary"
+                :disabled="isGeneratingReport || selectedTargets.length === 0"
+              >
+                {{ isGeneratingReport ? '生成中...' : `生成报告 (${selectedTargets.length} 个目标)` }}
+              </button>
+            </div>
+          </section>
+
+          <section v-if="reportData" class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2>检测报告</h2>
+                <p>这里展示你已选择目标的详细识别结果。</p>
+              </div>
+            </div>
+
+            <div class="table-shell">
+              <table class="report-table">
+                <thead>
+                  <tr>
+                    <th>序号</th>
+                    <th>框坐标</th>
+                    <th>水果分类</th>
+                    <th>分类置信度</th>
+                    <th>成熟度</th>
+                    <th>成熟度置信度</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="(item, idx) in reportData.targets" :key="idx">
+                    <td>{{ idx + 1 }}</td>
+                    <td>[{{ item.bbox.join(', ') }}]</td>
+                    <td>{{ item.fruit_classification.class }}</td>
+                    <td>{{ (item.fruit_classification.confidence * 100).toFixed(1) }}%</td>
+                    <td>{{ item.ripeness ? item.ripeness.predicted_class : '不适用' }}</td>
+                    <td>{{ item.ripeness ? (item.ripeness.confidence * 100).toFixed(1) + '%' : '-' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <div class="report-actions">
+              <button @click="downloadReportAsHtml" class="btn btn-success">下载 HTML 报告</button>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2>使用说明</h2>
+                <p>第一次使用时按下面顺序操作即可。</p>
+              </div>
+            </div>
+
+            <ul class="tips-list">
+              <li>点击“选择图片”或把图片拖到上传区域。</li>
+              <li>点击“开始检测”后，系统会在画面中显示检测框。</li>
+              <li>在右侧目标列表中勾选你需要继续分析的水果。</li>
+              <li>生成报告后，可直接下载 HTML 报告进行保存或分享。</li>
+            </ul>
+          </section>
         </div>
-      </div>
-
-      <!-- 错误信息 -->
-      <div v-if="errorMessage" class="error-message">
-        <i class="error-icon">⚠️</i>
-        {{ errorMessage }}
-      </div>
-
-      <!-- 使用说明 -->
-      <div class="instructions">
-        <h3>使用说明</h3>
-        <ul>
-          <li>点击"选择图片"按钮或拖拽图片到上传区域</li>
-          <li>支持 JPG、PNG 格式的图片文件，大小建议不超过 5MB</li>
-          <li>点击"开始检测"进行目标检测，图片上会显示检测框</li>
-          <li><strong>点击左侧目标列表或勾选复选框，对应的检测框会高亮显示（蓝色边框）</strong></li>
-          <li>勾选需要分析的目标，点击"生成报告"获取详细的水果分类和成熟度信息</li>
-          <li>报告生成后可以下载为 HTML 文件保存</li>
-        </ul>
-      </div>
+      </section>
     </div>
   </div>
 </template>
@@ -180,10 +249,10 @@ export default {
     return {
       selectedFile: null,
       originalImageUrl: null,
-      originalImage: null,      // 存储原始 Image 对象，用于 Canvas 绘制
-      targetsList: [],           // 从 detectImage 获取的目标列表
-      selectedTargets: [],       // 选中的目标索引
-      selectAll: false,          // 全选状态
+      originalImage: null,
+      targetsList: [],
+      selectedTargets: [],
+      selectAll: false,
       isProcessing: false,
       isGeneratingReport: false,
       processingTime: 0,
@@ -191,12 +260,11 @@ export default {
       dragOver: false,
       canvasWidth: 0,
       canvasHeight: 0,
-      reportData: null,          // 存储生成的报告数据
+      reportData: null,
       canvasContext: null
     }
   },
   watch: {
-    // 监听选中的目标变化，重新绘制 Canvas 高亮
     selectedTargets: {
       handler() {
         this.redrawCanvasWithHighlights()
@@ -210,24 +278,28 @@ export default {
     },
     onFileSelected(event) {
       const file = event.target.files[0]
-      if (file) this.handleFile(file)
+      if (file) {
+        this.handleFile(file)
+      }
     },
     onDragOver(event) {
       event.preventDefault()
       this.dragOver = true
     },
-    onDragLeave(event) {
+    onDragLeave() {
       this.dragOver = false
     },
     onDrop(event) {
       event.preventDefault()
       this.dragOver = false
       const file = event.dataTransfer.files[0]
-      if (file) this.handleFile(file)
+      if (file) {
+        this.handleFile(file)
+      }
     },
     handleFile(file) {
       if (!file.type.startsWith('image/')) {
-        this.errorMessage = '请选择图片文件（JPG、PNG等格式）'
+        this.errorMessage = '请选择图片文件（JPG、PNG 等格式）'
         return
       }
       if (file.size > 5 * 1024 * 1024) {
@@ -240,94 +312,77 @@ export default {
       this.selectedTargets = []
       this.reportData = null
       this.errorMessage = ''
+      this.selectAll = false
+      this.processingTime = 0
 
-      // 原图预览
-      if (this.originalImageUrl) URL.revokeObjectURL(this.originalImageUrl)
+      if (this.originalImageUrl) {
+        URL.revokeObjectURL(this.originalImageUrl)
+      }
       this.originalImageUrl = URL.createObjectURL(file)
 
-      // 加载原始图片到 Image 对象，用于 Canvas 绘制
       const img = new Image()
       img.onload = () => {
         this.originalImage = img
         this.canvasWidth = img.width
         this.canvasHeight = img.height
-        
-        // 初始化 Canvas
         this.initCanvas()
-        
-        // 如果有检测结果，重新绘制
         if (this.targetsList.length > 0) {
           this.redrawCanvasWithHighlights()
         }
       }
       img.src = this.originalImageUrl
     },
-
     initCanvas() {
       const canvas = this.$refs.resultCanvas
       if (canvas && this.originalImage) {
         canvas.width = this.originalImage.width
         canvas.height = this.originalImage.height
         this.canvasContext = canvas.getContext('2d')
-        
-        // 绘制原始图片
         this.canvasContext.drawImage(this.originalImage, 0, 0)
       }
     },
-
-    // 绘制所有检测框，并根据选中的索引高亮
     redrawCanvasWithHighlights() {
       const canvas = this.$refs.resultCanvas
       const ctx = this.canvasContext
-      
-      if (!canvas || !ctx || !this.originalImage) return
-      
-      // 清除画布并重新绘制原始图片
+      if (!canvas || !ctx || !this.originalImage) {
+        return
+      }
+
       ctx.clearRect(0, 0, canvas.width, canvas.height)
       ctx.drawImage(this.originalImage, 0, 0)
-      
-      // 绘制所有检测框
+
       this.targetsList.forEach((target, idx) => {
         const [x1, y1, x2, y2] = target.bbox
         const isSelected = this.selectedTargets.includes(idx)
-        
-        // 根据是否选中设置不同样式
+
         if (isSelected) {
-          // 选中的框：蓝色，更粗边框，带发光效果
           ctx.strokeStyle = '#3b82f6'
           ctx.lineWidth = 4
           ctx.shadowBlur = 8
           ctx.shadowColor = '#3b82f6'
         } else {
-          // 未选中的框：红色，正常边框
           ctx.strokeStyle = '#ef4444'
           ctx.lineWidth = 2
           ctx.shadowBlur = 0
         }
-        
+
         ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
-        
-        // 绘制标签背景
+
         const label = `${target.label} ${(target.confidence * 100).toFixed(1)}%`
-        ctx.font = 'bold 14px "Inter", "Segoe UI", Arial'
+        ctx.font = 'bold 14px "Segoe UI", "Microsoft YaHei", Arial'
         const textWidth = ctx.measureText(label).width
         const textHeight = 20
         const padding = 4
-        
-        // 标签背景
+
         ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.85)' : 'rgba(239, 68, 68, 0.85)'
         ctx.fillRect(x1, y1 - textHeight - padding, textWidth + padding * 2, textHeight + padding)
-        
-        // 标签文字
+
         ctx.fillStyle = '#ffffff'
         ctx.fillText(label, x1 + padding, y1 - padding)
       })
-      
-      // 重置阴影
+
       ctx.shadowBlur = 0
     },
-
-    // 切换目标选择（点击整行）
     toggleTargetSelection(idx) {
       const index = this.selectedTargets.indexOf(idx)
       if (index === -1) {
@@ -337,13 +392,9 @@ export default {
       }
       this.updateSelectAllState()
     },
-
-    // 复选框变化时调用
     onTargetSelectionChange() {
       this.updateSelectAllState()
     },
-
-    // 全选变化
     onSelectAllChange() {
       if (this.selectAll) {
         this.selectedTargets = this.targetsList.map((_, idx) => idx)
@@ -351,13 +402,9 @@ export default {
         this.selectedTargets = []
       }
     },
-
-    // 更新全选状态
     updateSelectAllState() {
       this.selectAll = this.selectedTargets.length === this.targetsList.length && this.targetsList.length > 0
     },
-
-    // 开始检测
     async detectImage() {
       if (!this.selectedFile) {
         this.errorMessage = '请先选择图片'
@@ -369,27 +416,22 @@ export default {
       this.targetsList = []
       this.selectedTargets = []
       this.reportData = null
+      this.selectAll = false
 
       const formData = new FormData()
       formData.append('image', this.selectedFile)
 
       try {
         const startTime = Date.now()
-
-        // 调用检测接口获取目标信息（不获取带框图片）
         const infoResult = await detectImage(formData)
-
         this.processingTime = Date.now() - startTime
 
-        // 处理目标列表
         if (infoResult.status === 'success') {
-          this.targetsList = infoResult.targets.map(target => ({
+          this.targetsList = infoResult.targets.map((target) => ({
             bbox: target.bbox,
             label: target.label,
             confidence: target.confidence
           }))
-          
-          // 绘制检测框（初始时全部未选中）
           if (this.originalImage) {
             this.redrawCanvasWithHighlights()
           }
@@ -399,7 +441,6 @@ export default {
       } catch (error) {
         console.error('图片检测失败:', error)
         this.errorMessage = error.message || '检测失败，请稍后重试'
-        // 清空画布
         const canvas = this.$refs.resultCanvas
         if (canvas && this.canvasContext && this.originalImage) {
           this.canvasContext.drawImage(this.originalImage, 0, 0)
@@ -408,8 +449,6 @@ export default {
         this.isProcessing = false
       }
     },
-
-    // 生成报告
     async generateReport() {
       if (this.selectedTargets.length === 0) {
         this.errorMessage = '请至少选择一个目标'
@@ -438,10 +477,10 @@ export default {
         this.isGeneratingReport = false
       }
     },
-
-    // 下载报告为 HTML
     downloadReportAsHtml() {
-      if (!this.reportData) return
+      if (!this.reportData) {
+        return
+      }
 
       const reportHtml = `
 <!DOCTYPE html>
@@ -450,77 +489,46 @@ export default {
   <meta charset="UTF-8">
   <title>水果检测报告</title>
   <style>
-    body {
-      font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-      padding: 20px;
-      background: #f5f7fa;
-    }
-    .container {
-      max-width: 1200px;
-      margin: 0 auto;
-      background: white;
-      border-radius: 16px;
-      padding: 24px;
-      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-    }
-    h1 {
-      color: #2c3e50;
-      border-bottom: 2px solid #409eff;
-      padding-bottom: 10px;
-    }
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      margin-top: 20px;
-    }
-    th, td {
-      border: 1px solid #ddd;
-      padding: 10px;
-      text-align: left;
-    }
-    th {
-      background: #f2f2f2;
-      font-weight: 600;
-    }
-    .footer {
-      margin-top: 20px;
-      text-align: center;
-      color: #7f8c8d;
-      font-size: 12px;
-    }
+    body { font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; padding: 20px; background: #f5f7fa; }
+    .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+    h1 { color: #2c3e50; border-bottom: 2px solid #409eff; padding-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+    th { background: #f2f2f2; font-weight: 600; }
+    .footer { margin-top: 20px; text-align: center; color: #7f8c8d; font-size: 12px; }
   </style>
 </head>
 <body>
-<div class="container">
-  <h1>水果检测报告</h1>
-  <p>生成时间: ${new Date().toLocaleString()}</p>
-  <p>共检测到 ${this.reportData.total_targets} 个目标</p>
-  <table>
-    <thead>
-      <tr>
-        <th>序号</th>
-        <th>框坐标</th>
-        <th>水果分类</th>
-        <th>分类置信度</th>
-        <th>成熟度</th>
-        <th>成熟度置信度</th>
-      </tr>
-    </thead>
-    <tbody>
-      ${this.reportData.targets.map((item, idx) => `
+  <div class="container">
+    <h1>水果检测报告</h1>
+    <p>生成时间: ${new Date().toLocaleString()}</p>
+    <p>共检测到 ${this.reportData.total_targets} 个目标</p>
+    <table>
+      <thead>
         <tr>
-          <td>${idx + 1}</td>
-          <td>[${item.bbox.join(',')}]</td>
-          <td>${item.fruit_classification.class}</td>
-          <td>${(item.fruit_classification.confidence * 100).toFixed(1)}%</td>
-          <td>${item.ripeness ? item.ripeness.predicted_class : '不适用'}</td>
-          <td>${item.ripeness ? (item.ripeness.confidence * 100).toFixed(1) + '%' : '-'}</td>
+          <th>序号</th>
+          <th>框坐标</th>
+          <th>水果分类</th>
+          <th>分类置信度</th>
+          <th>成熟度</th>
+          <th>成熟度置信度</th>
         </tr>
-      `).join('')}
-    </tbody>
-  </table>
-  <div class="footer">本报告由智能水果检测系统自动生成</div>
-</div>
+      </thead>
+      <tbody>
+        ${this.reportData.targets.map((item, idx) => `
+          <tr>
+            <td>${idx + 1}</td>
+            <td>[${item.bbox.join(',')}]</td>
+            <td>${item.fruit_classification.class}</td>
+            <td>${(item.fruit_classification.confidence * 100).toFixed(1)}%</td>
+            <td>${item.ripeness ? item.ripeness.predicted_class : '不适用'}</td>
+            <td>${item.ripeness ? (item.ripeness.confidence * 100).toFixed(1) + '%' : '-'}</td>
+          </tr>
+        `).join('')}
+      </tbody>
+    </table>
+    <div class="footer">本报告由智能水果检测系统自动生成</div>
+  </div>
 </body>
 </html>
       `
@@ -528,27 +536,29 @@ export default {
       const blob = new Blob([reportHtml], { type: 'text/html' })
       const link = document.createElement('a')
       link.href = URL.createObjectURL(blob)
-      link.download = `fruit_report_${new Date().toISOString().slice(0,19).replace(/:/g, '-')}.html`
+      link.download = `fruit_report_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.html`
       link.click()
       URL.revokeObjectURL(link.href)
     },
-
-    // 清空所有
     clearAll() {
       this.selectedFile = null
-      if (this.originalImageUrl) URL.revokeObjectURL(this.originalImageUrl)
+      if (this.originalImageUrl) {
+        URL.revokeObjectURL(this.originalImageUrl)
+      }
       this.originalImageUrl = null
       this.originalImage = null
       this.targetsList = []
       this.selectedTargets = []
+      this.selectAll = false
       this.reportData = null
       this.errorMessage = ''
       this.processingTime = 0
       this.canvasWidth = 0
       this.canvasHeight = 0
-      if (this.$refs.fileInput) this.$refs.fileInput.value = ''
-      
-      // 清空 Canvas
+      if (this.$refs.fileInput) {
+        this.$refs.fileInput.value = ''
+      }
+
       const canvas = this.$refs.resultCanvas
       if (canvas && this.canvasContext) {
         this.canvasContext.clearRect(0, 0, canvas.width, canvas.height)
@@ -556,356 +566,465 @@ export default {
     }
   },
   beforeUnmount() {
-    if (this.originalImageUrl) URL.revokeObjectURL(this.originalImageUrl)
+    if (this.originalImageUrl) {
+      URL.revokeObjectURL(this.originalImageUrl)
+    }
   }
 }
 </script>
 
 <style scoped>
-.image-detection {
+.image-page {
   padding: 20px;
-  font-family: 'Arial', 'Microsoft YaHei', sans-serif;
-  max-width: 1200px;
+  min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(44, 123, 83, 0.16), transparent 26%),
+    linear-gradient(180deg, #f4f8f5 0%, #edf3ef 100%);
+}
+
+.page-shell {
+  max-width: 1440px;
   margin: 0 auto;
+  display: grid;
+  gap: 20px;
 }
-.container {
-  background: white;
-  border-radius: 12px;
-  padding: 30px;
-  box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-}
-h1 {
-  text-align: center;
-  color: #2c3e50;
-  margin-bottom: 30px;
-  font-size: 2.2em;
-}
-.upload-section {
-  margin-bottom: 30px;
-}
-.upload-area {
-  border: 3px dashed #dcdfe6;
-  border-radius: 8px;
-  padding: 60px 20px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.3s ease;
-  background-color: #fafafa;
-  margin-bottom: 20px;
-}
-.upload-area:hover {
-  border-color: #409eff;
-  background-color: #f0f7ff;
-}
-.upload-area.drag-over {
-  border-color: #409eff;
-  background-color: #ecf5ff;
-}
-.upload-content {
-  color: #606266;
-}
-.upload-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-  display: block;
-}
-.upload-text {
-  font-size: 18px;
-  margin-bottom: 8px;
-  font-weight: 500;
-}
-.upload-hint {
-  font-size: 14px;
-  color: #909399;
-}
-.upload-controls {
-  display: flex;
-  gap: 12px;
-  justify-content: center;
-  flex-wrap: wrap;
-}
-.btn {
-  padding: 12px 24px;
+
+.hero,
+.panel-card {
+  border-radius: 24px;
   border: none;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 500;
-  transition: all 0.3s ease;
-  min-width: 100px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 20px 42px rgba(27, 51, 40, 0.08);
 }
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
+  gap: 24px;
+  padding: 28px 30px;
+  background: linear-gradient(135deg, #173b32 0%, #235042 58%, #3a7a65 100%);
+  color: #f6fbf8;
 }
-.btn-primary {
-  background-color: #409eff;
-  color: white;
-}
-.btn-primary:hover:not(:disabled) {
-  background-color: #66b1ff;
-}
-.btn-success {
-  background-color: #67c23a;
-  color: white;
-}
-.btn-success:hover:not(:disabled) {
-  background-color: #85ce61;
-}
-.btn-secondary {
-  background-color: #909399;
-  color: white;
-}
-.btn-secondary:hover:not(:disabled) {
-  background-color: #a6a9ad;
-}
-.image-section {
-  margin-bottom: 30px;
-}
-.image-comparison {
-  margin-bottom: 30px;
-}
-.image-container {
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 20px;
-  border: 1px solid #e9ecef;
-}
-.image-container h3 {
-  margin-top: 0;
-  margin-bottom: 15px;
-  color: #495057;
-  text-align: center;
-  font-size: 1.3em;
-}
-.highlight-badge {
+
+.eyebrow {
+  margin: 0 0 10px;
   font-size: 12px;
-  background: #3b82f6;
-  color: white;
-  padding: 2px 8px;
-  border-radius: 20px;
-  margin-left: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: rgba(246, 251, 248, 0.72);
 }
-.image-wrapper {
-  background: #1a1a2e;
-  border-radius: 6px;
-  padding: 10px;
-  border: 1px solid #dee2e6;
-  min-height: 200px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  position: relative;
+
+.hero h1 {
+  margin: 0;
+  font-size: 36px;
+  line-height: 1.1;
 }
-.canvas-wrapper {
-  padding: 0;
-  background: #f0f0f0;
+
+.hero-text {
+  margin: 14px 0 0;
+  line-height: 1.8;
+  color: rgba(246, 251, 248, 0.86);
 }
-.result-canvas {
-  max-width: 100%;
-  height: auto;
-  border-radius: 4px;
-  display: block;
-  margin: 0 auto;
-}
-.no-image {
-  color: #6c757d;
-  font-style: italic;
-  text-align: center;
-  padding: 40px;
-}
-.processing-overlay {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
-  background: rgba(0, 0, 0, 0.6);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  color: white;
+
+.hero-status {
+  display: grid;
   gap: 12px;
-  border-radius: 6px;
+  align-content: start;
 }
-.spinner {
+
+.hero-badge {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #eff8f4;
+}
+
+.guide-strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.guide-step {
+  display: flex;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 34px rgba(29, 54, 44, 0.06);
+}
+
+.guide-index {
+  flex: 0 0 40px;
   width: 40px;
   height: 40px;
-  border: 3px solid rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #173b32;
+  color: #f6fbf8;
+  font-weight: 700;
+}
+
+.guide-step h3,
+.panel-header h2,
+.empty-card-state h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: #18352b;
+}
+
+.guide-step p,
+.panel-header p,
+.empty-card-state p {
+  margin: 0;
+  line-height: 1.7;
+  color: #557064;
+}
+
+.error-banner {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: #fef3f2;
+  border: 1px solid #fecdca;
+  color: #b42318;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) 420px;
+  gap: 20px;
+  align-items: start;
+}
+
+.workspace-main,
+.workspace-side {
+  display: grid;
+  gap: 20px;
+}
+
+.workspace-side {
+  position: sticky;
+  top: 16px;
+}
+
+.panel-card {
+  padding: 22px;
+}
+
+.panel-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.panel-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #eef9f3;
+  color: #18533a;
+  font-size: 13px;
+}
+
+.upload-area {
+  border: 2px dashed #cdd9d3;
+  border-radius: 20px;
+  padding: 56px 20px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.25s ease;
+  background: linear-gradient(180deg, #f9fbfa 0%, #f2f7f4 100%);
+}
+
+.upload-area:hover,
+.upload-area.drag-over {
+  border-color: #2f6c59;
+  background: #eef6f2;
+}
+
+.upload-content {
+  color: #4f685d;
+}
+
+.upload-icon {
+  display: inline-flex;
+  width: 64px;
+  height: 64px;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 16px;
+  border-radius: 20px;
+  background: #173b32;
+  color: #f6fbf8;
+  font-size: 30px;
+}
+
+.upload-text {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.upload-hint {
+  margin: 0;
+  font-size: 14px;
+  color: #7a9086;
+}
+
+.action-row,
+.report-actions {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.file-meta-card {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #f6faf7;
+  color: #587166;
+  font-size: 13px;
+}
+
+.canvas-stage {
+  border-radius: 22px;
+  overflow: hidden;
+  background: linear-gradient(140deg, #0f172a 0%, #1a2c43 100%);
+}
+
+.canvas-wrapper {
+  position: relative;
+  overflow: auto;
+  text-align: center;
+  min-height: 420px;
+}
+
+.result-canvas {
+  display: block;
+  max-width: 100%;
+  height: auto !important;
+  margin: 0 auto;
+}
+
+.empty-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgba(236, 244, 241, 0.9);
+}
+
+.processing-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.5);
+  color: #fff;
+}
+
+.spinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid rgba(255, 255, 255, 0.24);
   border-top-color: #fff;
   border-radius: 50%;
   animation: spin 1s linear infinite;
 }
-@keyframes spin {
-  to { transform: rotate(360deg); }
+
+.empty-card-state,
+.empty-inline-tip {
+  padding: 18px 0 4px;
+  line-height: 1.7;
+  color: #557064;
 }
-.image-info {
-  margin-top: 10px;
-  text-align: center;
-  color: #6c757d;
-  font-size: 14px;
-}
-.targets-section {
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 20px;
-  margin-bottom: 30px;
-}
-.targets-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 15px;
-  flex-wrap: wrap;
-}
-.targets-header h3 {
-  margin: 0;
-}
-.select-all {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
+
 .targets-list {
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 10px;
-  max-height: 300px;
-  overflow-y: auto;
 }
+
 .target-item {
-  background: white;
-  padding: 12px 15px;
-  border-radius: 8px;
-  border: 1px solid #e9ecef;
   display: flex;
-  align-items: center;
-  gap: 15px;
-  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 14px;
+  border-radius: 16px;
+  background: #f7faf8;
+  border: 1px solid transparent;
   cursor: pointer;
   transition: all 0.2s ease;
 }
+
 .target-item:hover {
-  background: #f8f9fa;
-  border-color: #3b82f6;
-  transform: translateX(2px);
+  border-color: rgba(36, 84, 70, 0.12);
 }
-.target-item.target-selected {
-  background: #eef2ff;
-  border-color: #3b82f6;
-  border-left: 4px solid #3b82f6;
+
+.target-selected {
+  background: #eef6ff;
+  border-color: rgba(59, 130, 246, 0.28);
 }
-.target-checkbox {
-  width: 18px;
-  height: 18px;
-  cursor: pointer;
+
+.target-copy {
+  display: grid;
+  gap: 6px;
 }
+
 .target-label {
-  font-weight: 500;
-  color: #2c3e50;
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  font-weight: 700;
+  color: #173b32;
 }
-.confidence-badge {
-  background: #e9ecef;
-  padding: 2px 8px;
-  border-radius: 20px;
-  font-size: 12px;
-  font-weight: normal;
-  color: #495057;
-}
+
 .target-bbox {
+  font-size: 13px;
+  color: #6b8579;
+}
+
+.confidence-badge {
+  margin-left: 8px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(23, 59, 50, 0.08);
+  color: #2f6c59;
   font-size: 12px;
-  color: #7f8c8d;
-  font-family: monospace;
 }
-.report-actions {
-  margin-top: 20px;
-  text-align: center;
+
+.table-shell {
+  overflow: auto;
 }
-.report-section {
-  background: #f8f9fa;
-  border-radius: 8px;
-  padding: 20px;
-  margin-top: 20px;
-}
-.report-section h3 {
-  margin-top: 0;
-  margin-bottom: 15px;
-  text-align: center;
-}
-.report-content {
-  overflow-x: auto;
-}
+
 .report-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 14px;
 }
+
 .report-table th,
 .report-table td {
-  border: 1px solid #dee2e6;
-  padding: 10px;
+  padding: 12px 10px;
+  border-bottom: 1px solid #e5ece8;
   text-align: left;
+  font-size: 13px;
 }
+
 .report-table th {
-  background: #e9ecef;
-  font-weight: 600;
+  color: #587166;
+  font-weight: 700;
 }
-.download-report {
-  margin-top: 20px;
-  text-align: center;
-}
-.error-message {
-  background-color: #f8d7da;
-  color: #721c24;
-  padding: 15px;
-  border-radius: 6px;
-  border: 1px solid #f5c6cb;
-  margin-bottom: 20px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.error-icon {
-  font-size: 18px;
-}
-.instructions {
-  background: #e7f3ff;
-  border-radius: 8px;
-  padding: 20px;
-  border-left: 4px solid #409eff;
-}
-.instructions h3 {
-  margin-top: 0;
-  color: #2c3e50;
-  margin-bottom: 15px;
-}
-.instructions ul {
+
+.tips-list {
   margin: 0;
-  padding-left: 20px;
-  color: #495057;
+  padding-left: 18px;
+  color: #557064;
+  line-height: 1.9;
 }
-.instructions li {
-  margin-bottom: 8px;
-  line-height: 1.5;
+
+.btn {
+  min-width: 108px;
+  padding: 12px 18px;
+  border: none;
+  border-radius: 14px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 600;
+  transition: transform 0.2s ease, opacity 0.2s ease;
 }
+
+.btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.btn:not(:disabled):hover {
+  transform: translateY(-1px);
+}
+
+.btn-primary {
+  background: #173b32;
+  color: #fff;
+}
+
+.btn-success {
+  background: #2f6c59;
+  color: #fff;
+}
+
+.btn-secondary {
+  background: #edf3ef;
+  color: #244538;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (max-width: 1320px) {
+  .workspace-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .workspace-side {
+    position: static;
+  }
+}
+
+@media (max-width: 980px) {
+  .hero {
+    grid-template-columns: 1fr;
+  }
+
+  .guide-strip {
+    grid-template-columns: 1fr;
+  }
+}
+
 @media (max-width: 768px) {
-  .upload-controls {
+  .image-page {
+    padding: 12px;
+  }
+
+  .hero {
+    padding: 22px 20px;
+  }
+
+  .hero h1 {
+    font-size: 30px;
+  }
+
+  .action-row,
+  .report-actions,
+  .file-meta-card {
     flex-direction: column;
-    align-items: center;
   }
-  .btn {
-    width: 200px;
-  }
-  .target-item {
+
+  .panel-header {
     flex-direction: column;
-    align-items: flex-start;
   }
-  .report-table {
-    font-size: 12px;
+
+  .canvas-wrapper {
+    min-height: 280px;
   }
 }
 </style>

@@ -1,228 +1,487 @@
-﻿<template>
+<template>
   <div class="diameter-page">
     <div class="page-shell">
       <section class="hero">
-        <div>
-          <p class="eyebrow">Stereo Diameter Measurement</p>
-          <h1>双 USB 摄像头果径测量</h1>
+        <div class="hero-copy">
+          <p class="eyebrow">Fruit Diameter Workspace</p>
+          <h1>果径测量</h1>
           <p class="hero-text">
-            先确认双摄索引，再采集棋盘格完成当前设备标定，最后执行 YOLO + MonSter 果径测量。
+            普通用户按这个顺序操作即可：先扫描并选择相机，点击“启动画面”，确认水果完整出现在预览里，再点击“立即测量”。
+            第一次使用或更换相机时，再做一次“相机校准”。
           </p>
         </div>
+
         <div class="hero-actions">
-          <el-button plain :loading="statusLoading" @click="loadStatus">刷新相机状态</el-button>
-          <el-button plain type="warning" :loading="probing" @click="probeCameras">扫描索引</el-button>
-          <el-button plain type="info" :loading="runtimeLoading" @click="loadRuntimeStatus">刷新运行时</el-button>
-          <el-button plain type="primary" @click="usageDialogVisible = true">使用说明</el-button>
+          <div class="primary-actions">
+            <el-button type="primary" size="large" :loading="starting" @click="startCamera">启动画面</el-button>
+            <el-button
+              type="success"
+              size="large"
+              :loading="measuring"
+              :disabled="!cameraStatus.active"
+              @click="measureCurrentFrame"
+            >
+              立即测量
+            </el-button>
+            <el-button size="large" :disabled="!cameraStatus.active" @click="stopCamera">停止画面</el-button>
+          </div>
+
+          <div class="secondary-actions">
+            <el-button plain type="warning" :loading="probing" @click="probeCameras">扫描相机</el-button>
+            <el-button plain :loading="statusLoading" @click="loadStatus">刷新状态</el-button>
+            <el-button plain type="info" :loading="runtimeLoading" @click="loadRuntimeStatus">刷新引擎</el-button>
+            <el-button plain @click="usageDialogVisible = true">查看说明</el-button>
+          </div>
+
+          <div class="hero-badges">
+            <span class="hero-badge">{{ cameraStatus.active ? '画面已启动' : '画面未启动' }}</span>
+            <span class="hero-badge">{{ runtimeModeCopy }}</span>
+            <span class="hero-badge">{{ calibrationReady ? '已具备校准条件' : '首次使用建议先校准' }}</span>
+          </div>
         </div>
       </section>
 
-      <section class="layout-grid">
-        <div class="left-column">
-          <el-card shadow="never" class="control-card">
-            <template #header>
-              <div class="card-header">
-                <span>摄像头配置</span>
-                <el-tag :type="cameraStatus.active ? 'success' : 'info'">
-                  {{ cameraStatus.active ? '运行中' : '未启动' }}
-                </el-tag>
-              </div>
-            </template>
+      <section class="guide-strip">
+        <article class="guide-step">
+          <span class="guide-index">1</span>
+          <div>
+            <h3>先选相机</h3>
+            <p>点击“扫描相机”后，从设备名称里直接选择左相机和右相机，不再手动记索引。</p>
+          </div>
+        </article>
+        <article class="guide-step">
+          <span class="guide-index">2</span>
+          <div>
+            <h3>再看画面</h3>
+            <p>启动画面后，确认左右相机都正常，水果完整出现在中间区域。</p>
+          </div>
+        </article>
+        <article class="guide-step">
+          <span class="guide-index">3</span>
+          <div>
+            <h3>最后测量</h3>
+            <p>保持水果和相机短暂稳定，点击“立即测量”，结果会直接显示在下方。</p>
+          </div>
+        </article>
+      </section>
 
-            <el-form label-position="top" class="camera-form">
-              <el-form-item label="输入模式">
-                <el-select v-model="form.source_mode">
-                  <el-option label="单设备双目（左右拼接）" value="single" />
-                  <el-option label="双设备双目" value="dual" />
-                </el-select>
-              </el-form-item>
+      <section class="overview-grid">
+        <article class="overview-card">
+          <span class="overview-label">画面状态</span>
+          <strong class="overview-value">{{ cameraStatus.active ? '已启动' : '待启动' }}</strong>
+          <p class="overview-meta">最近取帧：{{ lastFrameTime }}</p>
+          <div class="overview-actions">
+            <el-button link type="primary" @click="loadStatus">刷新</el-button>
+            <el-button link type="danger" :disabled="!cameraStatus.active" @click="stopCamera">停止</el-button>
+          </div>
+        </article>
 
-              <el-form-item v-if="form.source_mode === 'single'" label="camera_index">
-                <el-input-number v-model="form.camera_index" :min="0" :step="1" />
-              </el-form-item>
+        <article class="overview-card">
+          <span class="overview-label">当前相机组合</span>
+          <strong class="overview-value">{{ cameraIndexText }}</strong>
+          <p class="overview-meta">{{ selectedCameraSummary }}</p>
+          <div class="overview-actions">
+            <el-button link type="warning" :loading="probing" @click="probeCameras">重新扫描</el-button>
+            <el-button link :disabled="!hasRecommendedPair" @click="useRecommendedPair">使用推荐</el-button>
+          </div>
+        </article>
 
-              <template v-else>
-                <el-form-item label="left_camera_index">
-                  <el-input-number v-model="form.left_camera_index" :min="0" :step="1" />
-                </el-form-item>
-                <el-form-item label="right_camera_index">
-                  <el-input-number v-model="form.right_camera_index" :min="0" :step="1" />
-                </el-form-item>
-              </template>
+        <article class="overview-card">
+          <span class="overview-label">测量引擎</span>
+          <strong class="overview-value">{{ runtimeModeCopy }}</strong>
+          <p class="overview-meta">{{ runtimeSummaryText }}</p>
+          <div class="overview-actions">
+            <el-button link type="info" :loading="runtimeLoading" @click="loadRuntimeStatus">刷新引擎</el-button>
+          </div>
+        </article>
 
-              <el-form-item label="split_mode">
-                <el-select v-model="form.split_mode">
-                  <el-option label="left_right" value="left_right" />
-                  <el-option label="top_bottom" value="top_bottom" />
-                </el-select>
-              </el-form-item>
+        <article class="overview-card">
+          <span class="overview-label">相机校准</span>
+          <strong class="overview-value">{{ calibrationReady ? '可直接测量' : '建议先校准' }}</strong>
+          <p class="overview-meta">已采集 {{ calibrationPairCount }} / {{ calibrationForm.min_pairs }} 组</p>
+          <div class="overview-actions">
+            <el-button link @click="loadCalibrationStatus">刷新</el-button>
+            <el-button link type="primary" @click="scrollToCalibration">去校准</el-button>
+          </div>
+        </article>
+      </section>
 
-              <div class="inline-grid">
-                <el-form-item label="宽度">
-                  <el-input-number v-model="form.frame_width" :min="1" :step="1" />
-                </el-form-item>
-                <el-form-item label="高度">
-                  <el-input-number v-model="form.frame_height" :min="1" :step="1" />
-                </el-form-item>
-              </div>
+      <el-alert
+        v-if="runtimeStatus && runtimeStatus.device_type !== 'cuda'"
+        title="当前测量引擎运行在 CPU，上一次测量等待时间偏长是正常现象。如果后续需要更快速度，再考虑切换到 GPU 环境。"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
 
-              <div class="inline-grid">
-                <el-form-item label="FPS">
-                  <el-input-number v-model="form.fps" :min="1" :max="120" :step="1" />
-                </el-form-item>
-                <el-form-item label="YOLO 置信度">
-                  <el-input-number v-model="form.conf" :min="0.01" :max="1" :step="0.01" :precision="2" />
-                </el-form-item>
-              </div>
+      <el-alert
+        v-if="errorMessage"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="true"
+        @close="errorMessage = ''"
+      />
 
-              <div class="switch-row">
-                <span>预览时叠加 YOLO 检测框</span>
-                <el-switch v-model="detectPreview" @change="refreshPreview" />
-              </div>
-
-              <div class="switch-row">
-                <span>测量后保存可视化结果</span>
-                <el-switch v-model="form.save_vis" />
-              </div>
-
-              <div class="button-group">
-                <el-button type="primary" :loading="starting" @click="startCamera">启动摄像头</el-button>
-                <el-button type="danger" :disabled="!cameraStatus.active" @click="stopCamera">停止摄像头</el-button>
-                <el-button
-                  type="success"
-                  :loading="measuring"
-                  :disabled="!cameraStatus.active"
-                  @click="measureCurrentFrame"
-                >
-                  测量当前帧
-                </el-button>
-                <el-button plain type="info" @click="usageDialogVisible = true">
-                  查看使用说明
-                </el-button>
-              </div>
-            </el-form>
-
-            <div class="status-panel">
-              <div class="status-line">
-                <span>最后取流时间</span>
-                <strong>{{ lastFrameTime }}</strong>
-              </div>
-              <div class="status-line">
-                <span>最近错误</span>
-                <strong>{{ cameraStatus.last_open_error || '无' }}</strong>
-              </div>
-              <div class="status-line">
-                <span>当前配置</span>
-                <strong>{{ configSummary }}</strong>
-              </div>
-            </div>
-          </el-card>
-
-          <el-card shadow="never" class="control-card">
-            <template #header>
-              <div class="card-header">
-                <span>MonSter 运行时</span>
-                <el-tag :type="runtimeTagType">{{ runtimeDeviceLabel }}</el-tag>
-              </div>
-            </template>
-
-            <div v-if="runtimeStatus" class="runtime-grid">
-              <div class="status-line">
-                <span>设备偏好</span>
-                <strong>{{ runtimeStatus.device_setting || runtimeStatus.preferred_device || 'auto' }}</strong>
-              </div>
-              <div class="status-line">
-                <span>当前设备</span>
-                <strong>{{ runtimeStatus.device_type || '-' }}</strong>
-              </div>
-              <div class="status-line">
-                <span>PyTorch</span>
-                <strong>{{ runtimeStatus.torch_version || '-' }}</strong>
-              </div>
-              <div class="status-line">
-                <span>CUDA</span>
-                <strong>{{ runtimeStatus.torch_cuda_version || '未启用' }}</strong>
-              </div>
-              <div class="status-line">
-                <span>GPU 数量</span>
-                <strong>{{ runtimeStatus.device_count ?? 0 }}</strong>
-              </div>
-              <div class="status-line">
-                <span>标定文件</span>
-                <strong class="path-text">{{ runtimeStatus.calib_path || '-' }}</strong>
-              </div>
-            </div>
-
-            <el-alert
-              v-if="runtimeStatus && runtimeStatus.device_type !== 'cuda'"
-              title="当前 MonSter 仍运行在 CPU。你机器有 NVIDIA GPU，但 shuiguo 环境里的 PyTorch 目前是 CPU 版，需要安装 CUDA 版 PyTorch 才能真正切到 GPU。"
-              type="warning"
-              :closable="false"
-              show-icon
-            />
-          </el-card>
-
-          <el-card shadow="never" class="control-card">
-            <template #header>
-              <div class="card-header">
-                <span>双摄探测</span>
-                <el-tag type="warning">推荐 {{ recommendedPairText }}</el-tag>
-              </div>
-            </template>
-
-            <div v-if="probeResults.length" class="probe-panel">
-              <div
-                v-for="item in probeResults"
-                :key="item.camera_index"
-                class="probe-item"
-                :class="{ success: item.opened }"
-              >
-                <div>
-                  <strong>索引 {{ item.camera_index }}</strong>
-                  <span>{{ item.opened ? '可打开' : '不可打开' }}</span>
-                </div>
-                <small v-if="item.opened">
-                  {{ item.frame_width || '-' }} x {{ item.frame_height || '-' }}
-                  <span v-if="item.fps"> | {{ item.fps }} fps</span>
-                </small>
-              </div>
-
-              <div v-if="pairProbeResults.length" class="pair-list">
-                <div class="pair-title">双摄组合</div>
-                <div
-                  v-for="pair in pairProbeResults"
-                  :key="`${pair.left_camera_index}-${pair.right_camera_index}`"
-                  class="probe-item"
-                  :class="{ success: pair.simultaneous_ok }"
-                >
-                  <div>
-                    <strong>{{ pair.left_camera_index }} / {{ pair.right_camera_index }}</strong>
-                    <span>{{ pair.simultaneous_ok ? '可同时打开' : '不可同时打开' }}</span>
-                  </div>
-                  <small>L={{ pair.left_read_ok ? 'ok' : 'fail' }} | R={{ pair.right_read_ok ? 'ok' : 'fail' }}</small>
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-hint">先点击“扫描索引”，确认当前双摄组合。</div>
-          </el-card>
-        </div>
-
-        <div class="right-column">
+      <section class="workspace-grid">
+        <div class="workspace-main">
           <el-card shadow="never" class="preview-card">
             <template #header>
               <div class="card-header">
-                <span>双目预览</span>
+                <div>
+                  <span>实时画面</span>
+                  <p class="card-subtitle">这里会显示左右相机拼接后的预览画面。</p>
+                </div>
                 <el-tag :type="previewUrl ? 'success' : 'info'">
                   {{ previewUrl ? '已连接' : '等待启动' }}
                 </el-tag>
               </div>
             </template>
 
+            <div class="preview-toolbar">
+              <div class="toggle-pill">
+                <span>预览中显示识别框</span>
+                <el-switch v-model="detectPreview" @change="refreshPreview" />
+              </div>
+              <div class="preview-toolbar__actions">
+                <el-button plain :loading="statusLoading" @click="loadStatus">刷新画面状态</el-button>
+                <el-button plain type="primary" :disabled="!cameraStatus.active" @click="measureCurrentFrame">
+                  用当前画面测量
+                </el-button>
+              </div>
+            </div>
+
             <div class="preview-stage">
-              <img v-if="previewUrl" :src="previewUrl" alt="stereo preview" class="preview-image" @error="handlePreviewError" />
-              <div v-if="previewError" class="preview-error">{{ previewError }}</div>
-              <div v-if="!previewUrl" class="preview-placeholder">
-                启动摄像头后，这里会显示左右拼接的双目画面。
+              <img
+                v-if="previewUrl"
+                :src="previewUrl"
+                alt="stereo preview"
+                class="preview-image"
+                @error="handlePreviewError"
+              />
+              <div v-else class="preview-placeholder">
+                <h3>等待画面接入</h3>
+                <p>点击顶部“启动画面”后，这里会显示测量预览。</p>
+              </div>
+            </div>
+
+            <p v-if="previewError" class="preview-error">{{ previewError }}</p>
+          </el-card>
+
+          <el-card v-if="measuring" shadow="never" class="result-card">
+            <template #header>
+              <div class="card-header">
+                <div>
+                  <span>正在测量</span>
+                  <p class="card-subtitle">系统正在识别水果并计算果径。</p>
+                </div>
+                <el-tag type="warning">{{ measureElapsedSeconds }}s</el-tag>
+              </div>
+            </template>
+
+            <div class="loading-copy">
+              <p>请保持相机与水果稳定，等待本次测量完成。</p>
+              <p>{{ runtimeStatus && runtimeStatus.device_type !== 'cuda' ? '当前为 CPU 模式，等待时间可能更长。' : '当前为 GPU 模式，速度通常更快。' }}</p>
+            </div>
+            <el-progress :percentage="measureProgressPercent" status="warning" />
+          </el-card>
+
+          <el-card shadow="never" class="result-card">
+            <template #header>
+              <div class="card-header">
+                <div>
+                  <span>测量结果</span>
+                  <p class="card-subtitle">每个识别到的水果都会显示对应果径。</p>
+                </div>
+                <el-tag v-if="measurementResult" type="warning">
+                  有效 {{ measurementResult.valid_measurements || 0 }} / {{ measurementResult.total_targets || 0 }}
+                </el-tag>
+                <el-tag v-else type="info">等待测量</el-tag>
+              </div>
+            </template>
+
+            <template v-if="measurementResult">
+              <el-alert
+                v-if="measurementResult.total_targets === 0"
+                title="这次没有检测到水果。请让水果完整进入画面，尽量放在中间区域并保持清晰。"
+                type="warning"
+                :closable="false"
+                show-icon
+              />
+
+              <div class="result-meta">
+                <div class="metric-box">
+                  <span>平均果径</span>
+                  <strong>{{ formatDistance(statistics.avg_distance_mm) }}</strong>
+                </div>
+                <div class="metric-box">
+                  <span>最小果径</span>
+                  <strong>{{ formatDistance(statistics.min_distance_mm) }}</strong>
+                </div>
+                <div class="metric-box">
+                  <span>最大果径</span>
+                  <strong>{{ formatDistance(statistics.max_distance_mm) }}</strong>
+                </div>
+              </div>
+
+              <el-table :data="measurementTargets" stripe border size="small" class="target-table">
+                <el-table-column prop="index" label="#" width="60">
+                  <template #default="scope">
+                    {{ scope.row.index !== null && scope.row.index !== undefined ? scope.row.index + 1 : '-' }}
+                  </template>
+                </el-table-column>
+                <el-table-column prop="label" label="水果" min-width="120" />
+                <el-table-column label="识别置信度" width="120">
+                  <template #default="scope">
+                    {{ scope.row.confidence !== null && scope.row.confidence !== undefined ? scope.row.confidence.toFixed(3) : '-' }}
+                  </template>
+                </el-table-column>
+                <el-table-column prop="bbox" label="识别区域" min-width="180">
+                  <template #default="scope">
+                    {{ formatBbox(scope.row.bbox) }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="果径(mm)" width="120">
+                  <template #default="scope">
+                    {{ scope.row.distance_mm !== undefined && scope.row.distance_mm !== null ? scope.row.distance_mm.toFixed(2) : '-' }}
+                  </template>
+                </el-table-column>
+                <el-table-column prop="status" label="说明" min-width="180" />
+              </el-table>
+
+              <div v-if="resultImageUrl" class="result-image-wrap">
+                <img :src="resultImageUrl" alt="measurement visualization" class="result-image" />
+              </div>
+            </template>
+
+            <div v-else class="empty-state">
+              <h3>结果会显示在这里</h3>
+              <p>启动画面并点击“立即测量”后，系统会展示果径统计和每个水果的详细结果。</p>
+            </div>
+          </el-card>
+        </div>
+
+        <div class="workspace-side">
+          <el-card shadow="never" class="control-card">
+            <template #header>
+              <div class="card-header">
+                <div>
+                  <span>相机与测量设置</span>
+                  <p class="card-subtitle">先扫描相机，再直接从设备名称中选择当前使用的相机组合。</p>
+                </div>
+                <el-button plain size="small" @click="configEditing = !configEditing">
+                  {{ configEditing ? '收起高级设置' : '展开高级设置' }}
+                </el-button>
+              </div>
+            </template>
+
+            <div class="camera-picker-card">
+              <div class="picker-toolbar">
+                <el-button plain type="warning" :loading="probing" @click="probeCameras">扫描相机</el-button>
+                <span class="picker-hint">扫描后可直接按设备名称选择左/右相机</span>
+              </div>
+
+              <el-form label-position="top" class="camera-form">
+                <el-form-item label="相机连接方式">
+                  <el-segmented
+                    v-model="form.source_mode"
+                    :options="sourceModeOptions"
+                    block
+                  />
+                </el-form-item>
+
+                <template v-if="cameraOptions.length">
+                  <el-form-item v-if="form.source_mode === 'single'" label="当前相机">
+                    <el-select v-model="form.camera_index" placeholder="请选择相机" filterable>
+                      <el-option
+                        v-for="item in cameraOptions"
+                        :key="`single-${item.camera_index}`"
+                        :label="item.optionLabel"
+                        :value="item.camera_index"
+                      />
+                    </el-select>
+                  </el-form-item>
+
+                  <div v-else class="inline-grid">
+                    <el-form-item label="左相机">
+                      <el-select v-model="form.left_camera_index" placeholder="请选择左相机" filterable>
+                        <el-option
+                          v-for="item in cameraOptions"
+                          :key="`left-${item.camera_index}`"
+                          :label="item.optionLabel"
+                          :value="item.camera_index"
+                        />
+                      </el-select>
+                    </el-form-item>
+                    <el-form-item label="右相机">
+                      <el-select v-model="form.right_camera_index" placeholder="请选择右相机" filterable>
+                        <el-option
+                          v-for="item in cameraOptions"
+                          :key="`right-${item.camera_index}`"
+                          :label="item.optionLabel"
+                          :value="item.camera_index"
+                        />
+                      </el-select>
+                    </el-form-item>
+                  </div>
+                </template>
+
+                <div v-else class="empty-inline-tip">
+                  还没有扫描结果。点击上方“扫描相机”后，这里会列出可用设备名称。
+                </div>
+              </el-form>
+            </div>
+
+            <div class="summary-list">
+              <div v-for="item in configSummaryItems" :key="item.label" class="summary-row">
+                <span>{{ item.label }}</span>
+                <strong>{{ item.value }}</strong>
+              </div>
+            </div>
+
+            <div class="inline-actions">
+              <el-button :disabled="!hasRecommendedPair" @click="useRecommendedPair">使用推荐相机组合</el-button>
+              <el-button plain type="primary" @click="startCamera">按当前配置启动</el-button>
+            </div>
+
+            <div v-if="configEditing" class="edit-panel">
+              <el-form label-position="top" class="camera-form">
+                <el-form-item label="拼接方式">
+                  <el-select v-model="form.split_mode">
+                    <el-option label="左右拼接" value="left_right" />
+                    <el-option label="上下拼接" value="top_bottom" />
+                  </el-select>
+                </el-form-item>
+
+                <div class="inline-grid">
+                  <el-form-item label="画面宽度">
+                    <el-input-number v-model="form.frame_width" :min="1" :step="1" />
+                  </el-form-item>
+                  <el-form-item label="画面高度">
+                    <el-input-number v-model="form.frame_height" :min="1" :step="1" />
+                  </el-form-item>
+                </div>
+
+                <div class="inline-grid">
+                  <el-form-item label="采集帧率">
+                    <el-input-number v-model="form.fps" :min="1" :max="120" :step="1" />
+                  </el-form-item>
+                  <el-form-item label="识别灵敏度">
+                    <el-input-number
+                      v-model="form.conf"
+                      :min="0.01"
+                      :max="1"
+                      :step="0.01"
+                      :precision="2"
+                    />
+                  </el-form-item>
+                </div>
+
+                <div class="toggle-list">
+                  <div class="toggle-pill">
+                    <span>预览中显示识别框</span>
+                    <el-switch v-model="detectPreview" @change="refreshPreview" />
+                  </div>
+                  <div class="toggle-pill">
+                    <span>测量后保存结果图</span>
+                    <el-switch v-model="form.save_vis" />
+                  </div>
+                </div>
+              </el-form>
+            </div>
+          </el-card>
+
+          <el-card id="calibration-card" shadow="never" class="control-card">
+            <template #header>
+              <div class="card-header">
+                <div>
+                  <span>相机校准</span>
+                  <p class="card-subtitle">只在第一次使用、换相机或测量误差明显变大时需要。</p>
+                </div>
+                <el-button plain size="small" @click="calibrationEditing = !calibrationEditing">
+                  {{ calibrationEditing ? '收起参数' : '修改校准参数' }}
+                </el-button>
+              </div>
+            </template>
+
+            <div class="summary-list">
+              <div v-for="item in calibrationSummaryItems" :key="item.label" class="summary-row">
+                <span>{{ item.label }}</span>
+                <strong :class="{ 'path-text': item.isPath }">{{ item.value }}</strong>
+              </div>
+            </div>
+
+            <div class="calibration-note">
+              建议拍摄近、中、远不同距离的棋盘格，并让棋盘格尽量覆盖左、中、右多个位置。
+            </div>
+
+            <div class="button-group">
+              <el-button
+                type="primary"
+                :loading="capturingCalibration"
+                :disabled="!cameraStatus.active"
+                @click="captureCalibrationPair"
+              >
+                采集一组校准图片
+              </el-button>
+              <el-button
+                type="warning"
+                :loading="calibrating"
+                :disabled="!calibrationSessionId || calibrationPairCount < calibrationForm.min_pairs"
+                @click="runCalibration"
+              >
+                开始校准并应用
+              </el-button>
+            </div>
+
+            <div v-if="calibrationEditing" class="edit-panel">
+              <el-form label-position="top" class="camera-form">
+                <div class="inline-grid">
+                  <el-form-item label="棋盘格列数">
+                    <el-input-number v-model="calibrationForm.cols" :min="3" :max="32" />
+                  </el-form-item>
+                  <el-form-item label="棋盘格行数">
+                    <el-input-number v-model="calibrationForm.rows" :min="3" :max="32" />
+                  </el-form-item>
+                </div>
+
+                <div class="inline-grid">
+                  <el-form-item label="方格边长(mm)">
+                    <el-input-number
+                      v-model="calibrationForm.square_mm"
+                      :min="0.1"
+                      :step="0.1"
+                      :precision="1"
+                    />
+                  </el-form-item>
+                  <el-form-item label="最少采集组数">
+                    <el-input-number v-model="calibrationForm.min_pairs" :min="4" :max="64" />
+                  </el-form-item>
+                </div>
+
+                <div class="toggle-pill">
+                  <span>校准成功后立即应用到测量服务</span>
+                  <el-switch v-model="calibrationForm.activate" />
+                </div>
+              </el-form>
+            </div>
+
+            <div v-if="calibrationResult" class="success-panel">
+              <el-alert
+                title="校准已完成，新的标定文件已经可以用于后续测量。"
+                type="success"
+                :closable="false"
+                show-icon
+              />
+              <div class="summary-list compact">
+                <div class="summary-row">
+                  <span>校准误差 RMS</span>
+                  <strong>{{ calibrationResult.stereo_rms }}</strong>
+                </div>
+                <div class="summary-row">
+                  <span>双相机基线</span>
+                  <strong>{{ calibrationResult.baseline_mm }} mm</strong>
+                </div>
               </div>
             </div>
           </el-card>
@@ -230,178 +489,80 @@
           <el-card shadow="never" class="control-card">
             <template #header>
               <div class="card-header">
-                <span>当前设备标定</span>
-                <el-tag :type="calibrationPairCount >= calibrationForm.min_pairs ? 'success' : 'info'">
-                  已采集 {{ calibrationPairCount }} 组
-                </el-tag>
+                <div>
+                  <span>更多设备信息</span>
+                  <p class="card-subtitle">技术细节和扫描结果统一收在这里，避免主界面过长。</p>
+                </div>
               </div>
             </template>
 
-            <el-form label-position="top" class="camera-form">
-              <div class="inline-grid">
-                <el-form-item label="棋盘列数">
-                  <el-input-number v-model="calibrationForm.cols" :min="3" :max="32" />
-                </el-form-item>
-                <el-form-item label="棋盘行数">
-                  <el-input-number v-model="calibrationForm.rows" :min="3" :max="32" />
-                </el-form-item>
-              </div>
+            <el-collapse v-model="openInfoPanels" class="info-collapse">
+              <el-collapse-item name="runtime" title="测量引擎详情">
+                <div class="summary-list compact">
+                  <div v-for="item in runtimeDetailItems" :key="item.label" class="summary-row">
+                    <span>{{ item.label }}</span>
+                    <strong :class="{ 'path-text': item.isPath }">{{ item.value }}</strong>
+                  </div>
+                </div>
+              </el-collapse-item>
 
-              <div class="inline-grid">
-                <el-form-item label="方格边长(mm)">
-                  <el-input-number v-model="calibrationForm.square_mm" :min="0.1" :step="0.1" :precision="1" />
-                </el-form-item>
-                <el-form-item label="最少有效组数">
-                  <el-input-number v-model="calibrationForm.min_pairs" :min="4" :max="64" />
-                </el-form-item>
-              </div>
+              <el-collapse-item name="probe" title="相机扫描结果">
+                <div class="probe-section">
+                  <div class="summary-list compact">
+                    <div class="summary-row">
+                      <span>推荐组合</span>
+                      <strong>{{ recommendedPairText }}</strong>
+                    </div>
+                  </div>
 
-              <div class="switch-row">
-                <span>标定成功后立即激活到测量服务</span>
-                <el-switch v-model="calibrationForm.activate" />
-              </div>
+                  <div v-if="probeResults.length" class="probe-list">
+                    <div
+                      v-for="item in probeResults"
+                      :key="item.camera_index"
+                      class="probe-item"
+                      :class="{ success: item.opened }"
+                    >
+                      <div>
+                        <strong>{{ item.device_name || `相机 ${item.camera_index}` }}</strong>
+                        <span>索引 {{ item.camera_index }} | {{ item.opened ? '可打开' : '不可打开' }}</span>
+                      </div>
+                      <small v-if="item.opened">
+                        {{ item.frame_width || '-' }} x {{ item.frame_height || '-' }}
+                        <span v-if="item.fps"> | {{ item.fps }} fps</span>
+                      </small>
+                    </div>
+                  </div>
 
-              <div class="button-group">
-                <el-button
-                  type="primary"
-                  :loading="capturingCalibration"
-                  :disabled="!cameraStatus.active"
-                  @click="captureCalibrationPair"
-                >
-                  采集当前棋盘格
-                </el-button>
-                <el-button
-                  type="warning"
-                  :loading="calibrating"
-                  :disabled="!calibrationSessionId || calibrationPairCount < calibrationForm.min_pairs"
-                  @click="runCalibration"
-                >
-                  执行双目标定
-                </el-button>
-              </div>
-            </el-form>
+                  <div v-else class="empty-state compact-empty">
+                    <p>还没有扫描结果。点击顶部或配置卡片中的“扫描相机”即可查看。</p>
+                  </div>
 
-            <div class="status-panel">
-              <div class="status-line">
-                <span>会话 ID</span>
-                <strong class="path-text">{{ calibrationSessionId || '未开始' }}</strong>
-              </div>
-              <div class="status-line">
-                <span>有效建议</span>
-                <strong>建议至少采集 {{ calibrationForm.min_pairs }} 组，并覆盖近/中/远、左/中/右多个角度</strong>
-              </div>
-            </div>
+                  <div v-if="pairProbeResults.length" class="probe-list">
+                    <div
+                      v-for="pair in pairProbeResults"
+                      :key="`${pair.left_camera_index}-${pair.right_camera_index}`"
+                      class="probe-item"
+                      :class="{ success: pair.simultaneous_ok }"
+                    >
+                      <div>
+                        <strong>{{ formatPairLabel(pair.left_camera_index, pair.right_camera_index) }}</strong>
+                        <span>{{ pair.simultaneous_ok ? '可同时打开' : '不可同时打开' }}</span>
+                      </div>
+                      <small>L={{ pair.left_read_ok ? 'ok' : 'fail' }} | R={{ pair.right_read_ok ? 'ok' : 'fail' }}</small>
+                    </div>
+                  </div>
+                </div>
+              </el-collapse-item>
 
-            <el-alert
-              v-if="calibrationResult"
-              title="标定已完成并已生成新的立体标定文件。"
-              type="success"
-              :closable="false"
-              show-icon
-            />
-
-            <div v-if="calibrationResult" class="runtime-grid">
-              <div class="status-line">
-                <span>Stereo RMS</span>
-                <strong>{{ calibrationResult.stereo_rms }}</strong>
-              </div>
-              <div class="status-line">
-                <span>Baseline</span>
-                <strong>{{ calibrationResult.baseline_mm }} mm</strong>
-              </div>
-              <div class="status-line">
-                <span>新标定文件</span>
-                <strong class="path-text">{{ calibrationResult.activated_calib_path || calibrationResult.output_calib_path }}</strong>
-              </div>
-            </div>
-          </el-card>
-
-          <el-alert
-            v-if="errorMessage"
-            :title="errorMessage"
-            type="error"
-            show-icon
-            :closable="true"
-            @close="errorMessage = ''"
-          />
-
-          <el-card v-if="measuring" shadow="never" class="result-card">
-            <template #header>
-              <div class="card-header">
-                <span>测量进行中</span>
-                <el-tag type="warning">{{ measureElapsedSeconds }}s</el-tag>
-              </div>
-            </template>
-
-            <div class="loading-copy">
-              <p>正在执行 YOLO 检测、双目矫正和 MonSter 深度推理。</p>
-              <p v-if="runtimeStatus && runtimeStatus.device_type !== 'cuda'">当前是 CPU 路径，等待 30-90 秒是正常现象。</p>
-              <p v-else>当前是 GPU 路径，通常会明显更快。</p>
-            </div>
-            <el-progress :percentage="measureProgressPercent" status="warning" />
-          </el-card>
-
-          <el-card v-if="measurementResult" shadow="never" class="result-card">
-            <template #header>
-              <div class="card-header">
-                <span>测量结果</span>
-                <el-tag type="warning">
-                  有效目标 {{ measurementResult.valid_measurements || 0 }}/{{ measurementResult.total_targets || 0 }}
-                </el-tag>
-              </div>
-            </template>
-
-            <el-alert
-              v-if="measurementResult.total_targets === 0"
-              title="本次没有检测到水果。请把水果完整放到左相机画面里，并确保目标足够大、清晰、光照稳定，然后重新测量。"
-              type="warning"
-              :closable="false"
-              show-icon
-            />
-
-            <div class="result-meta">
-              <div class="metric-box">
-                <span>平均果径</span>
-                <strong>{{ formatDistance(statistics.avg_distance_mm) }}</strong>
-              </div>
-              <div class="metric-box">
-                <span>最小果径</span>
-                <strong>{{ formatDistance(statistics.min_distance_mm) }}</strong>
-              </div>
-              <div class="metric-box">
-                <span>最大果径</span>
-                <strong>{{ formatDistance(statistics.max_distance_mm) }}</strong>
-              </div>
-            </div>
-
-            <el-table :data="measurementTargets" stripe border size="small" class="target-table">
-              <el-table-column prop="index" label="#" width="60">
-                <template #default="scope">
-                  {{ scope.row.index !== null && scope.row.index !== undefined ? scope.row.index + 1 : '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column prop="label" label="目标" min-width="120" />
-              <el-table-column label="置信度" width="110">
-                <template #default="scope">
-                  {{ scope.row.confidence !== null && scope.row.confidence !== undefined ? scope.row.confidence.toFixed(3) : '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column prop="bbox" label="YOLO 框" min-width="180">
-                <template #default="scope">
-                  {{ formatBbox(scope.row.bbox) }}
-                </template>
-              </el-table-column>
-              <el-table-column label="果径(mm)" width="120">
-                <template #default="scope">
-                  {{ scope.row.distance_mm !== undefined && scope.row.distance_mm !== null ? scope.row.distance_mm.toFixed(2) : '-' }}
-                </template>
-              </el-table-column>
-              <el-table-column prop="status" label="状态" min-width="180" />
-            </el-table>
-
-            <div v-if="resultImageUrl" class="result-image-wrap">
-              <img :src="resultImageUrl" alt="measurement visualization" class="result-image" />
-            </div>
+              <el-collapse-item name="status" title="当前运行状态">
+                <div class="summary-list compact">
+                  <div v-for="item in cameraStatusItems" :key="item.label" class="summary-row">
+                    <span>{{ item.label }}</span>
+                    <strong>{{ item.value }}</strong>
+                  </div>
+                </div>
+              </el-collapse-item>
+            </el-collapse>
           </el-card>
         </div>
       </section>
@@ -415,45 +576,33 @@
       destroy-on-close
     >
       <div class="usage-dialog__body">
-        <p>
-          这个页面用于用双目相机抓取当前画面，并自动估计水果的横向直径。第一次使用时，按下面的顺序操作即可。
-        </p>
+        <section class="usage-block">
+          <h3>最短操作路径</h3>
+          <ol>
+            <li>点击“扫描相机”，从设备名称中选好左/右相机。</li>
+            <li>点击“启动画面”，确认水果完整进入预览。</li>
+            <li>第一次使用或换相机时，先执行一次“相机校准”。</li>
+            <li>点击“立即测量”，在结果区查看果径。</li>
+          </ol>
+        </section>
 
         <section class="usage-block">
-          <h3>怎么用</h3>
-          <ol>
-            <li>先把双目摄像头接好，确认左右画面都正常，水果能同时出现在两个镜头里。</li>
-            <li>根据你的设备选择输入模式：如果是一台相机输出左右拼接画面，选“单设备双目”；如果是两台相机分别拍摄，选“双设备双目”。</li>
-            <li>点击“启动摄像头”，先看实时预览，确认画面清晰、没有明显卡顿，水果没有被裁掉。</li>
-            <li>把水果放在镜头前，尽量让水果位于画面中间，避免离镜头太近或太远。</li>
-            <li>如果当前设备还没有完成标定，先采集棋盘格并执行双目标定；已经标定过则可直接测量。</li>
-            <li>保持水果和相机短暂稳定，然后点击“测量当前帧”。</li>
-            <li>等待结果返回后，在“测量结果”区域查看每个水果的果径数值。通常单位是毫米，数值越大表示果径越大。</li>
-          </ol>
+          <h3>什么时候需要改高级设置</h3>
+          <ul>
+            <li>大多数情况下只要扫描相机并选择设备即可，不需要改其他参数。</li>
+            <li>只有在画面尺寸、帧率、拼接方式变化时，再展开“高级设置”。</li>
+            <li>如果不确定相机组合，先扫描，再优先使用系统推荐组合。</li>
+          </ul>
         </section>
 
         <section class="usage-block">
           <h3>结果怎么看</h3>
           <ul>
-            <li>如果画面里检测到多个水果，系统会分别给出每个目标的测量结果。</li>
-            <li>如果提示没有检测到水果，通常是水果没有完整进入画面，或者当前角度、光照不适合识别。</li>
-            <li>如果结果波动较大，先检查相机是否晃动、左右画面是否对齐，以及水果边缘是否清晰。</li>
+            <li>平均、最小、最大果径显示的是本次识别到的水果统计值。</li>
+            <li>表格里会列出每个水果的果径和识别说明。</li>
+            <li>如果没有检测到水果，通常是水果没有完整入镜、距离不合适或画面不清晰。</li>
           </ul>
         </section>
-
-        <section class="usage-block">
-          <h3>简短原理</h3>
-          <p>
-            系统会先利用双目图像恢复水果与相机之间的空间深度，再识别出水果在图像中的位置，最后在水果左右边缘之间计算真实空间距离，把这个距离作为果径估计值。
-          </p>
-          <p>
-            可以简单理解为：先看出“水果在哪里、离相机多远”，再把图像里的宽度换算成现实中的宽度。
-          </p>
-        </section>
-
-        <div class="usage-tip">
-          为了更容易测准：尽量使用稳定光照、保持镜头清洁、让水果正对镜头，并优先把水果放在画面中央区域。
-        </div>
       </div>
     </el-dialog>
   </div>
@@ -488,6 +637,8 @@ export default {
       probing: false,
       capturingCalibration: false,
       calibrating: false,
+      configEditing: false,
+      calibrationEditing: false,
       detectPreview: true,
       previewSocket: null,
       previewWsPath: DEFAULT_PREVIEW_WS_PATH,
@@ -510,6 +661,12 @@ export default {
       calibrationResult: null,
       measureElapsedSeconds: 0,
       measureTimer: null,
+      openInfoPanels: ['runtime'],
+      lastProbeMaxIndex: 8,
+      sourceModeOptions: [
+        { label: '左右各一台相机', value: 'dual' },
+        { label: '一台相机输出左右拼接画面', value: 'single' }
+      ],
       cameraStatus: {
         active: false,
         config: {},
@@ -545,34 +702,144 @@ export default {
       }
       return new Date(this.cameraStatus.last_frame_ts * 1000).toLocaleString()
     },
-    configSummary() {
-      const config = this.cameraStatus.config || {}
-      const mode = config.source_mode || this.form.source_mode
-      if (mode === 'dual') {
-        return `dual | left=${config.left_camera_index ?? this.form.left_camera_index}, right=${config.right_camera_index ?? this.form.right_camera_index}, split=${config.split_mode ?? this.form.split_mode}`
-      }
-      return `single | camera=${config.camera_index ?? this.form.camera_index}, split=${config.split_mode ?? this.form.split_mode}`
-    },
     statistics() {
       return this.measurementResult?.statistics || {}
     },
     measurementTargets() {
       return this.measurementResult?.targets || []
     },
+    cameraOptions() {
+      const optionMap = new Map()
+      for (const item of this.probeResults) {
+        if (!item.opened) {
+          continue
+        }
+        optionMap.set(item.camera_index, {
+          ...item,
+          optionLabel: this.buildCameraOptionLabel(item.camera_index, item.device_name)
+        })
+      }
+
+      const currentIndexes = [this.form.camera_index, this.form.left_camera_index, this.form.right_camera_index]
+      for (const cameraIndex of currentIndexes) {
+        if (cameraIndex === null || cameraIndex === undefined || optionMap.has(cameraIndex)) {
+          continue
+        }
+        optionMap.set(cameraIndex, {
+          camera_index: cameraIndex,
+          opened: false,
+          device_name: '',
+          optionLabel: this.buildCameraOptionLabel(cameraIndex, '')
+        })
+      }
+
+      return Array.from(optionMap.values()).sort((a, b) => a.camera_index - b.camera_index)
+    },
     recommendedPairText() {
-      if (!Array.isArray(this.recommendedPair) || this.recommendedPair.length !== 2) {
+      if (!this.hasRecommendedPair) {
         return '未找到'
       }
-      return `${this.recommendedPair[0]} / ${this.recommendedPair[1]}`
+      return this.formatPairLabel(this.recommendedPair[0], this.recommendedPair[1])
     },
-    runtimeDeviceLabel() {
-      if (!this.runtimeStatus) {
-        return '未知'
+    hasRecommendedPair() {
+      return Array.isArray(this.recommendedPair) && this.recommendedPair.length === 2
+    },
+    cameraIndexText() {
+      if (this.form.source_mode === 'single') {
+        return this.formatCameraLabel(this.form.camera_index)
       }
-      return this.runtimeStatus.device_type === 'cuda' ? 'GPU' : 'CPU'
+      return `${this.formatCameraLabel(this.form.left_camera_index)} / ${this.formatCameraLabel(this.form.right_camera_index)}`
     },
-    runtimeTagType() {
-      return this.runtimeStatus?.device_type === 'cuda' ? 'success' : 'warning'
+    selectedCameraSummary() {
+      if (this.form.source_mode === 'single') {
+        return `当前相机：${this.formatCameraLabel(this.form.camera_index)}`
+      }
+      return `左：${this.formatCameraLabel(this.form.left_camera_index)}，右：${this.formatCameraLabel(this.form.right_camera_index)}`
+    },
+    sourceModeLabel() {
+      return this.form.source_mode === 'single' ? '一台相机输出左右拼接画面' : '左右各一台相机'
+    },
+    splitModeLabel() {
+      return this.form.split_mode === 'top_bottom' ? '上下拼接' : '左右拼接'
+    },
+    frameSizeText() {
+      if (this.form.frame_width && this.form.frame_height) {
+        return `${this.form.frame_width} x ${this.form.frame_height}`
+      }
+      return '跟随相机默认值'
+    },
+    fpsText() {
+      return this.form.fps ? `${this.form.fps} fps` : '跟随相机默认值'
+    },
+    runtimeModeCopy() {
+      if (!this.runtimeStatus) {
+        return '引擎状态未读取'
+      }
+      return this.runtimeStatus.device_type === 'cuda' ? 'GPU 加速' : 'CPU 模式'
+    },
+    runtimeSummaryText() {
+      if (!this.runtimeStatus) {
+        return '点击“刷新引擎”查看当前设备信息'
+      }
+      const device = this.runtimeStatus.device_type || '-'
+      const torch = this.runtimeStatus.torch_version || '-'
+      return `当前设备：${device}，PyTorch：${torch}`
+    },
+    calibrationReady() {
+      return this.calibrationPairCount >= this.calibrationForm.min_pairs
+    },
+    configSummaryItems() {
+      return [
+        { label: '相机连接方式', value: this.sourceModeLabel },
+        { label: '当前相机组合', value: this.selectedCameraSummary },
+        { label: '推荐组合', value: this.recommendedPairText },
+        { label: '拼接方式', value: this.splitModeLabel },
+        { label: '画面尺寸', value: this.frameSizeText },
+        { label: '采集帧率', value: this.fpsText },
+        { label: '识别灵敏度', value: Number(this.form.conf || 0).toFixed(2) },
+        { label: '预览识别框', value: this.detectPreview ? '显示' : '隐藏' },
+        { label: '测量结果图', value: this.form.save_vis ? '保存' : '不保存' }
+      ]
+    },
+    calibrationSummaryItems() {
+      return [
+        { label: '当前会话', value: this.calibrationSessionId || '未开始' },
+        { label: '已采集图片组数', value: `${this.calibrationPairCount} / ${this.calibrationForm.min_pairs}` },
+        { label: '自动应用校准', value: this.calibrationForm.activate ? '是' : '否' },
+        {
+          label: '当前标定文件',
+          value:
+            this.calibrationResult?.activated_calib_path ||
+            this.calibrationResult?.output_calib_path ||
+            this.runtimeStatus?.calib_path ||
+            '暂无',
+          isPath: true
+        }
+      ]
+    },
+    runtimeDetailItems() {
+      if (!this.runtimeStatus) {
+        return [{ label: '状态', value: '尚未读取运行时信息' }]
+      }
+      return [
+        {
+          label: '设备偏好',
+          value: this.runtimeStatus.device_setting || this.runtimeStatus.preferred_device || 'auto'
+        },
+        { label: '当前设备', value: this.runtimeStatus.device_type || '-' },
+        { label: 'PyTorch', value: this.runtimeStatus.torch_version || '-' },
+        { label: 'CUDA', value: this.runtimeStatus.torch_cuda_version || '未启用' },
+        { label: 'GPU 数量', value: String(this.runtimeStatus.device_count ?? 0) },
+        { label: '标定文件', value: this.runtimeStatus.calib_path || '-', isPath: true }
+      ]
+    },
+    cameraStatusItems() {
+      return [
+        { label: '画面运行状态', value: this.cameraStatus.active ? '运行中' : '未启动' },
+        { label: '最后取帧时间', value: this.lastFrameTime },
+        { label: '连续失败次数', value: String(this.cameraStatus.consecutive_failures ?? 0) },
+        { label: '最近错误', value: this.cameraStatus.last_open_error || '无' }
+      ]
     },
     measureProgressPercent() {
       return Math.min(95, Math.max(10, this.measureElapsedSeconds * 2))
@@ -607,6 +874,66 @@ export default {
         }
       }
       return payload
+    },
+    patchFormFromConfig(config = {}) {
+      const keys = [
+        'source_mode',
+        'camera_index',
+        'left_camera_index',
+        'right_camera_index',
+        'split_mode',
+        'frame_width',
+        'frame_height',
+        'fps'
+      ]
+      for (const key of keys) {
+        if (config[key] !== undefined && config[key] !== null) {
+          this.form[key] = config[key]
+        }
+      }
+    },
+    buildCameraOptionLabel(cameraIndex, deviceName) {
+      if (deviceName) {
+        return `${deviceName}（索引 ${cameraIndex}）`
+      }
+      return `相机 ${cameraIndex}`
+    },
+    getCameraOption(cameraIndex) {
+      return this.cameraOptions.find((item) => item.camera_index === cameraIndex) || null
+    },
+    getCameraName(cameraIndex) {
+      return this.getCameraOption(cameraIndex)?.device_name || ''
+    },
+    formatCameraLabel(cameraIndex) {
+      const deviceName = this.getCameraName(cameraIndex)
+      return deviceName ? `${deviceName}（${cameraIndex}）` : `相机 ${cameraIndex}`
+    },
+    formatPairLabel(leftIndex, rightIndex) {
+      return `${this.formatCameraLabel(leftIndex)} / ${this.formatCameraLabel(rightIndex)}`
+    },
+    useRecommendedPair() {
+      if (!this.hasRecommendedPair) {
+        return
+      }
+      this.form.source_mode = 'dual'
+      this.form.left_camera_index = this.recommendedPair[0]
+      this.form.right_camera_index = this.recommendedPair[1]
+      ElMessage.success(`已切换为推荐组合：${this.recommendedPairText}`)
+    },
+    currentCameraSelectionInvalid() {
+      if (!this.cameraOptions.length) {
+        return true
+      }
+      if (this.form.source_mode === 'single') {
+        return !this.getCameraOption(this.form.camera_index)
+      }
+      return !this.getCameraOption(this.form.left_camera_index) || !this.getCameraOption(this.form.right_camera_index)
+    },
+    scrollToCalibration() {
+      const target = document.getElementById('calibration-card')
+      if (target) {
+        target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      }
     },
     getPreviewStreamFps() {
       return DEFAULT_PREVIEW_FPS
@@ -729,6 +1056,7 @@ export default {
           this.previewStatus = payload
           this.cameraStatus.active = !!payload.camera_active
           this.cameraStatus.config = payload.config || this.cameraStatus.config
+          this.patchFormFromConfig(payload.config || {})
           return
         }
         if (payload.type === 'preview.status') {
@@ -736,6 +1064,10 @@ export default {
           this.cameraStatus.active = !!payload.camera_active
           this.cameraStatus.last_frame_ts = payload.last_frame_ts || null
           this.cameraStatus.consecutive_failures = payload.consecutive_failures || 0
+          if (payload.config) {
+            this.cameraStatus.config = payload.config
+            this.patchFormFromConfig(payload.config)
+          }
           if (!payload.camera_active) {
             this.clearPreviewFrame()
           }
@@ -784,7 +1116,7 @@ export default {
       this.statusLoading = true
       try {
         const data = await getCameraStatus()
-        this.applyStatus(data, { connectPreview: false })
+        this.applyStatus(data, { connectPreview: !!data.active })
       } catch (error) {
         this.errorMessage = this.extractError(error, '读取摄像头状态失败')
       } finally {
@@ -796,7 +1128,7 @@ export default {
       try {
         this.runtimeStatus = await getMeasureRuntimeStatus()
       } catch (error) {
-        this.errorMessage = this.extractError(error, '读取 MonSter 运行时状态失败')
+        this.errorMessage = this.extractError(error, '读取测量引擎状态失败')
       } finally {
         this.runtimeLoading = false
       }
@@ -808,24 +1140,27 @@ export default {
         this.calibrationPairCount = data.pair_count || 0
         this.calibrationResult = data.result || null
       } catch (error) {
-        this.errorMessage = this.extractError(error, '读取标定状态失败')
+        this.errorMessage = this.extractError(error, '读取校准状态失败')
       }
     },
     async probeCameras() {
       this.probing = true
       this.errorMessage = ''
       try {
-        const data = await probeCameraIndices(4)
+        const data = await probeCameraIndices(this.lastProbeMaxIndex)
         this.probeResults = data.results || []
         this.pairProbeResults = data.pair_results || []
         this.recommendedPair = data.recommended_dual_pair || null
-        if (Array.isArray(this.recommendedPair) && this.recommendedPair.length === 2) {
-          this.form.source_mode = 'dual'
-          this.form.left_camera_index = this.recommendedPair[0]
-          this.form.right_camera_index = this.recommendedPair[1]
-          ElMessage.success(`推荐双摄组合 ${this.recommendedPair[0]} / ${this.recommendedPair[1]}`)
+        this.openInfoPanels = Array.from(new Set([...this.openInfoPanels, 'probe']))
+
+        if (this.currentCameraSelectionInvalid() && this.hasRecommendedPair) {
+          this.useRecommendedPair()
+        } else if (this.hasRecommendedPair) {
+          ElMessage.success(`扫描完成，推荐组合为：${this.recommendedPairText}`)
+        } else if ((data.opened_count || 0) > 0) {
+          ElMessage.warning('已扫描到相机，但没有找到可同时打开的推荐双摄组合')
         } else {
-          ElMessage.warning('没有检测到可同时打开的双摄组合')
+          ElMessage.warning('没有扫描到可用相机')
         }
       } catch (error) {
         this.errorMessage = this.extractError(error, '扫描摄像头索引失败')
@@ -842,6 +1177,7 @@ export default {
         last_frame_ts: data.last_frame_ts || null,
         consecutive_failures: data.consecutive_failures || 0
       }
+      this.patchFormFromConfig(this.cameraStatus.config)
 
       if (!this.cameraStatus.active) {
         this.previewError = ''
@@ -854,11 +1190,16 @@ export default {
       }
     },
     async startCamera() {
+      if (this.form.source_mode === 'dual' && this.form.left_camera_index === this.form.right_camera_index) {
+        this.errorMessage = '双摄模式下，左相机和右相机不能选择同一个设备'
+        return
+      }
       this.starting = true
       this.errorMessage = ''
       try {
         const data = await startStereoCamera(this.toPayload())
         this.applyStatus(data, { connectPreview: true })
+        this.configEditing = false
         ElMessage.success('摄像头已启动')
       } catch (error) {
         this.errorMessage = this.extractError(error, '启动摄像头失败')
@@ -934,9 +1275,9 @@ export default {
         })
         this.calibrationSessionId = data.session_id
         this.calibrationPairCount = data.pair_count || 0
-        ElMessage.success(`已采集第 ${data.captured_index} 组标定图`)
+        ElMessage.success(`已采集第 ${data.captured_index} 组校准图`)
       } catch (error) {
-        this.errorMessage = this.extractError(error, '采集标定图失败')
+        this.errorMessage = this.extractError(error, '采集校准图失败')
       } finally {
         this.capturingCalibration = false
       }
@@ -955,6 +1296,7 @@ export default {
         })
         this.calibrationResult = data
         this.runtimeStatus = data.runtime_status || this.runtimeStatus
+        this.calibrationEditing = false
         ElMessage.success('双目标定完成，已更新当前测量标定文件')
       } catch (error) {
         this.errorMessage = this.extractError(error, '执行双目标定失败')
@@ -995,10 +1337,10 @@ export default {
 <style scoped>
 .diameter-page {
   padding: 20px;
-  background:
-    radial-gradient(circle at top left, rgba(15, 118, 110, 0.16), transparent 28%),
-    linear-gradient(180deg, #f7faf8 0%, #eef5f1 100%);
   min-height: 100%;
+  background:
+    radial-gradient(circle at top left, rgba(44, 123, 83, 0.16), transparent 26%),
+    linear-gradient(180deg, #f4f8f5 0%, #edf3ef 100%);
 }
 
 .page-shell {
@@ -1008,16 +1350,24 @@ export default {
   gap: 20px;
 }
 
-.hero {
-  display: flex;
-  justify-content: space-between;
-  gap: 20px;
-  align-items: flex-start;
-  padding: 28px 32px;
+.hero,
+.overview-card,
+.control-card,
+.preview-card,
+.result-card {
+  border: none;
   border-radius: 24px;
-  background: linear-gradient(135deg, #173b32 0%, #245446 55%, #3d7a67 100%);
-  color: #f4fbf8;
-  box-shadow: 0 20px 40px rgba(23, 59, 50, 0.18);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 20px 42px rgba(27, 51, 40, 0.08);
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(340px, 0.9fr);
+  gap: 24px;
+  padding: 28px 30px;
+  background: linear-gradient(135deg, #173b32 0%, #235042 58%, #3a7a65 100%);
+  color: #f6fbf8;
 }
 
 .eyebrow {
@@ -1025,56 +1375,265 @@ export default {
   font-size: 12px;
   letter-spacing: 0.18em;
   text-transform: uppercase;
-  color: rgba(244, 251, 248, 0.72);
+  color: rgba(246, 251, 248, 0.72);
 }
 
 .hero h1 {
   margin: 0;
-  font-size: 34px;
-  line-height: 1.15;
+  font-size: 36px;
+  line-height: 1.1;
 }
 
 .hero-text {
-  margin: 12px 0 0;
-  max-width: 720px;
-  color: rgba(244, 251, 248, 0.84);
-  line-height: 1.7;
+  margin: 14px 0 0;
+  max-width: 780px;
+  line-height: 1.8;
+  color: rgba(246, 251, 248, 0.86);
 }
 
 .hero-actions {
+  display: grid;
+  gap: 14px;
+  align-content: start;
+}
+
+.primary-actions,
+.secondary-actions,
+.hero-badges,
+.overview-actions,
+.preview-toolbar__actions,
+.inline-actions,
+.picker-toolbar {
   display: flex;
-  gap: 12px;
+  gap: 10px;
   flex-wrap: wrap;
 }
 
-.layout-grid {
+.hero-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.12);
+  color: #eff8f4;
+  font-size: 13px;
+}
+
+.guide-strip {
   display: grid;
-  grid-template-columns: 380px minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.guide-step {
+  display: flex;
+  gap: 14px;
+  padding: 18px 20px;
+  border-radius: 22px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 14px 34px rgba(29, 54, 44, 0.06);
+}
+
+.guide-index {
+  flex: 0 0 40px;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #173b32;
+  color: #f6fbf8;
+  font-weight: 700;
+}
+
+.guide-step h3,
+.empty-state h3,
+.preview-placeholder h3 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: #18352b;
+}
+
+.guide-step p,
+.empty-state p,
+.preview-placeholder p {
+  margin: 0;
+  line-height: 1.7;
+  color: #557064;
+}
+
+.overview-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.overview-card {
+  padding: 20px;
+}
+
+.overview-label {
+  display: block;
+  margin-bottom: 10px;
+  font-size: 13px;
+  color: #60796d;
+}
+
+.overview-value {
+  display: block;
+  font-size: 24px;
+  line-height: 1.2;
+  color: #19362c;
+}
+
+.overview-meta {
+  margin: 10px 0 14px;
+  min-height: 42px;
+  line-height: 1.6;
+  color: #587166;
+}
+
+.workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.45fr) 420px;
   gap: 20px;
   align-items: start;
 }
 
-.left-column,
-.right-column {
+.workspace-main,
+.workspace-side {
   display: grid;
   gap: 20px;
 }
 
-.control-card,
-.preview-card,
-.result-card {
-  border: none;
-  border-radius: 24px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 18px 40px rgba(43, 66, 59, 0.08);
+.workspace-side {
+  position: sticky;
+  top: 16px;
 }
 
 .card-header {
   display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  font-weight: 700;
+}
+
+.card-subtitle {
+  margin: 6px 0 0;
+  font-weight: 400;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #678075;
+}
+
+.preview-toolbar,
+.toggle-list,
+.button-group {
+  display: grid;
+  gap: 12px;
+}
+
+.preview-toolbar {
+  margin-bottom: 18px;
+}
+
+.toggle-pill {
+  display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  font-weight: 700;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #f4f8f5;
+  color: #224438;
+}
+
+.preview-stage {
+  min-height: 500px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 24px;
+  overflow: hidden;
+  background: linear-gradient(140deg, #0f172a 0%, #1a2c43 100%);
+  border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.preview-image,
+.result-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.preview-placeholder {
+  max-width: 380px;
+  text-align: center;
+  padding: 28px;
+}
+
+.preview-placeholder h3,
+.preview-placeholder p {
+  color: rgba(236, 244, 241, 0.92);
+}
+
+.preview-error {
+  margin: 14px 0 0;
+  color: #b42318;
+  line-height: 1.7;
+}
+
+.camera-picker-card {
+  margin-bottom: 16px;
+  padding: 16px;
+  border-radius: 18px;
+  background: #f6faf7;
+}
+
+.picker-hint {
+  color: #587166;
+  font-size: 13px;
+  line-height: 32px;
+}
+
+.summary-list {
+  display: grid;
+  gap: 10px;
+  padding: 16px;
+  border-radius: 18px;
+  background: #f6faf7;
+}
+
+.summary-list.compact {
+  padding: 0;
+  background: transparent;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 14px;
+  font-size: 13px;
+  color: #587166;
+}
+
+.summary-row strong {
+  text-align: right;
+  color: #1b2f28;
+}
+
+.inline-actions {
+  margin-top: 14px;
+}
+
+.edit-panel,
+.success-panel,
+.probe-section {
+  margin-top: 16px;
 }
 
 .camera-form :deep(.el-form-item) {
@@ -1087,134 +1646,39 @@ export default {
   gap: 12px;
 }
 
-.switch-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 12px 14px;
-  margin-bottom: 12px;
+.empty-inline-tip {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.8);
+  border: 1px dashed rgba(36, 84, 70, 0.16);
+  color: #587166;
+  line-height: 1.7;
+}
+
+.calibration-note {
+  margin-top: 16px;
+  padding: 14px 16px;
   border-radius: 16px;
-  background: #f6fbf8;
-  color: #21443a;
+  background: rgba(245, 158, 11, 0.12);
+  border: 1px solid rgba(245, 158, 11, 0.18);
+  color: #7c4a03;
+  line-height: 1.7;
 }
 
 .button-group {
-  display: grid;
-  gap: 12px;
-  margin-top: 8px;
+  margin-top: 16px;
 }
 
 .button-group .el-button {
   width: 100%;
 }
 
-.status-panel,
-.runtime-grid,
-.probe-panel {
-  display: grid;
-  gap: 10px;
-  margin-top: 16px;
-  padding: 16px;
-  border-radius: 18px;
-  background: #f7faf8;
-}
-
-.probe-panel {
-  background: #fff8eb;
-}
-
-.status-line {
-  display: flex;
-  justify-content: space-between;
-  gap: 16px;
-  font-size: 13px;
-  color: #4e635b;
-}
-
-.status-line strong {
-  text-align: right;
-  color: #1d2b25;
-}
-
-.path-text {
-  word-break: break-all;
-}
-
-.probe-item {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  align-items: center;
-  padding: 10px 12px;
-  border-radius: 14px;
-  background: rgba(255, 255, 255, 0.72);
-  color: #7c5a13;
-}
-
-.probe-item.success {
-  background: #eef9f3;
-  color: #18533a;
-}
-
-.probe-item div {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.pair-list {
-  display: grid;
-  gap: 10px;
-}
-
-.pair-title {
-  font-weight: 700;
-  color: #5f4710;
-}
-
-.preview-stage {
-  min-height: 460px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 20px;
-  overflow: hidden;
-  background: linear-gradient(135deg, #0f172a 0%, #18283c 100%);
-  border: 1px solid rgba(148, 163, 184, 0.2);
-}
-
-.preview-image,
-.result-image {
-  display: block;
-  width: 100%;
-  height: auto;
-}
-
-.preview-placeholder,
-.empty-hint {
-  max-width: 360px;
-  text-align: center;
-  line-height: 1.8;
-  color: rgba(226, 232, 240, 0.8);
-}
-
-.preview-error {
-  margin-top: 12px;
-  color: #b42318;
-  line-height: 1.7;
-}
-
-.empty-hint {
-  color: #4e635b;
-}
-
 .loading-copy {
   display: grid;
   gap: 8px;
   margin-bottom: 16px;
-  color: #35594d;
   line-height: 1.7;
+  color: #35594d;
 }
 
 .result-meta {
@@ -1233,9 +1697,9 @@ export default {
 
 .metric-box span {
   display: block;
+  margin-bottom: 8px;
   font-size: 13px;
   color: #5b746a;
-  margin-bottom: 8px;
 }
 
 .metric-box strong {
@@ -1254,21 +1718,69 @@ export default {
   border: 1px solid rgba(148, 163, 184, 0.18);
 }
 
+.empty-state {
+  padding: 18px 6px 4px;
+}
+
+.compact-empty {
+  padding: 8px 0 0;
+}
+
+.path-text {
+  word-break: break-all;
+}
+
+.info-collapse :deep(.el-collapse-item__header) {
+  font-weight: 600;
+  color: #204337;
+}
+
+.info-collapse :deep(.el-collapse-item__wrap) {
+  border-bottom: none;
+}
+
+.probe-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.probe-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: #fff8eb;
+  color: #7c5a13;
+}
+
+.probe-item.success {
+  background: #eef9f3;
+  color: #18533a;
+}
+
+.probe-item div {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .usage-dialog__body {
   color: #26453b;
   line-height: 1.8;
 }
 
-.usage-dialog__body p {
-  margin: 0 0 14px;
-}
-
 .usage-block {
-  margin-top: 16px;
   padding: 18px;
   border-radius: 18px;
   background: linear-gradient(180deg, #f8fbfa 0%, #eef5f1 100%);
   border: 1px solid rgba(36, 84, 70, 0.08);
+}
+
+.usage-block + .usage-block {
+  margin-top: 16px;
 }
 
 .usage-block h3 {
@@ -1283,26 +1795,31 @@ export default {
   padding-left: 22px;
 }
 
-.usage-block li {
-  margin-bottom: 8px;
+.usage-block li + li {
+  margin-top: 8px;
 }
 
-.usage-tip {
-  margin-top: 16px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: rgba(245, 158, 11, 0.12);
-  border: 1px solid rgba(245, 158, 11, 0.18);
-  color: #7c4a03;
-}
+@media (max-width: 1320px) {
+  .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 
-@media (max-width: 1180px) {
-  .layout-grid {
+  .workspace-grid {
     grid-template-columns: 1fr;
   }
 
+  .workspace-side {
+    position: static;
+  }
+}
+
+@media (max-width: 980px) {
   .hero {
-    flex-direction: column;
+    grid-template-columns: 1fr;
+  }
+
+  .guide-strip {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -1316,17 +1833,25 @@ export default {
   }
 
   .hero h1 {
-    font-size: 28px;
+    font-size: 30px;
   }
 
+  .overview-grid,
   .inline-grid,
   .result-meta {
     grid-template-columns: 1fr;
   }
 
   .preview-stage {
-    min-height: 280px;
+    min-height: 300px;
+  }
+
+  .summary-row {
+    flex-direction: column;
+  }
+
+  .summary-row strong {
+    text-align: left;
   }
 }
 </style>
-
