@@ -87,3 +87,100 @@ export function measureFruitDiameter(formData) {
     timeout: 120000
   })
 }
+
+export function measureInfer(formData) {
+  return request({
+    url: '/api/measure/infer/',
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000
+  })
+}
+
+export function measureDistance(data) {
+  return request({
+    url: '/api/measure/distance/',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getCameraStatus() {
+  return request({
+    url: '/api/camera/status/',
+    method: 'get',
+    timeout: 10000
+  })
+}
+
+export function probeCameraIndices(maxIndex = 4) {
+  return request({
+    url: `/api/camera/probe/?max_index=${maxIndex}`,
+    method: 'get',
+    timeout: 120000
+  })
+}
+
+export function startStereoCamera(data) {
+  return request({
+    url: '/api/camera/start/',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function stopStereoCamera() {
+  return request({
+    url: '/api/camera/stop/',
+    method: 'post',
+    data: {},
+    timeout: 10000
+  })
+}
+
+export function measureCurrentStereoFrame(data) {
+  return request({
+    url: '/api/camera/measure/',
+    method: 'post',
+    data,
+    timeout: 300000
+  })
+}
+
+export function getMeasureRuntimeStatus() {
+  return request({
+    url: '/api/measure/runtime-status/',
+    method: 'get',
+    timeout: 15000
+  })
+}
+
+export function getCalibrationStatus(sessionId = '') {
+  const suffix = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : ''
+  return request({
+    url: `/api/camera/calibration/status/${suffix}`,
+    method: 'get',
+    timeout: 15000
+  })
+}
+
+export function captureCalibrationFrame(data) {
+  return request({
+    url: '/api/camera/calibration/capture/',
+    method: 'post',
+    data,
+    timeout: 60000
+  })
+}
+
+export function runStereoCalibration(data) {
+  return request({
+    url: '/api/camera/calibration/run/',
+    method: 'post',
+    data,
+    timeout: 600000
+  })
+}

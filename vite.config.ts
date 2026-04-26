@@ -1,5 +1,4 @@
-// vite.config.ts
-import { fileURLToPath, URL } from 'node:url'
+﻿import { fileURLToPath, URL } from 'node:url'
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import vueDevTools from 'vite-plugin-vue-devtools'
@@ -7,20 +6,37 @@ import vueDevTools from 'vite-plugin-vue-devtools'
 export default defineConfig({
   plugins: [
     vue(),
-    vueDevTools(),
+    vueDevTools()
   ],
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url))
-    },
+    }
   },
   server: {
     proxy: {
       '/api/': {
-        target: 'http://localhost:8000',  // 后端地址
-        changeOrigin: true,               // 解决跨域
-
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/media/': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/camera/': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      },
+      '/ws/': {
+        target: 'ws://localhost:8000',
+        changeOrigin: true,
+        ws: true
+      },
+      '/static/': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
       }
     }
   }
 })
+
