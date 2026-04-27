@@ -22,8 +22,12 @@ const routes = [
     children: [
       {
         path: '/dashboard',
-        name: 'dashboard',
-        component: () => import('../views/DashboardView.vue')
+        redirect: '/console'
+      },
+      {
+        path: '/console',
+        name: 'console',
+        component: () => import('../views/ConsoleView.vue')
       },
       {
         path: '/detection/image',
@@ -73,7 +77,7 @@ router.beforeEach((to, _from, next) => {
   const token = getToken()
 
   if (to.path === '/login' && token) {
-    next('/dashboard')
+    next('/console')
     return
   }
 

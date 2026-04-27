@@ -112,7 +112,7 @@ export default {
         }
 
         ElMessage.success('登录成功')
-        await this.$router.replace(res.redirect || '/dashboard')
+        await this.$router.replace(res.redirect || '/console')
       } catch (error) {
         ElMessage.error(resolveLoginError(error))
       } finally {

@@ -176,7 +176,7 @@ export default {
         if (res?.status === 'success') {
           storeLoginState(res.user || null)
           ElMessage.success('注册成功，正在进入系统...')
-          await this.$router.push('/dashboard')
+          await this.$router.push('/console')
           return
         }
 
