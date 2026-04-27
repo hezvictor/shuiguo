@@ -3,6 +3,7 @@ import io
 import os
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone as dt_timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -350,6 +351,48 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assert_error_payload(resp)
 
+    @patch('fruit_api.views_modules.camera_views.probe_camera_indices')
+    def test_camera_probe_returns_device_names(self, mock_probe):
+        mock_probe.return_value = {
+            'backend': 'CAP_DSHOW',
+            'max_index': 4,
+            'results': [
+                {
+                    'camera_index': 1,
+                    'opened': True,
+                    'device_name': 'USB 2.0 Camera',
+                    'device_name_inferred': True,
+                },
+                {
+                    'camera_index': 2,
+                    'opened': True,
+                    'device_name': 'USB 2.0 Camera',
+                    'device_name_inferred': True,
+                },
+            ],
+            'pair_results': [
+                {
+                    'left_camera_index': 1,
+                    'right_camera_index': 2,
+                    'simultaneous_ok': True,
+                    'left_device_name': 'USB 2.0 Camera',
+                    'right_device_name': 'USB 2.0 Camera',
+                }
+            ],
+            'device_catalog': [
+                {'device_name': 'USB 2.0 Camera', 'device_status': 'OK'},
+                {'device_name': 'USB 2.0 Camera', 'device_status': 'OK'},
+            ],
+            'opened_count': 2,
+            'recommended_dual_pair': [1, 2],
+        }
+
+        resp = self.client.get('/api/camera/probe/?max_index=4')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['results'][0]['device_name'], 'USB 2.0 Camera')
+        self.assertEqual(resp.data['pair_results'][0]['left_device_name'], 'USB 2.0 Camera')
+
     @patch('fruit_api.views_modules.camera_views.measure_and_save_history')
     @patch('fruit_api.views_modules.camera_views.apps.get_app_config')
     @patch('fruit_api.views_modules.camera_views.get_stereo_camera_service')
@@ -398,6 +441,202 @@ class VideoApiTests(ErrorPayloadAssertMixin, APITestCase):
         resp = self.client.delete('/api/video/cleanup/not-exists/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
         self.assert_error_payload(resp)
+
+
+class ConsoleApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='console_user', password='pass1234')
+        self.other_user = User.objects.create_user(username='console_other', password='pass1234')
+        self.client.force_authenticate(user=self.user)
+
+    def _create_history(self, *, user=None, detection_type='image', summary=None, created_at=None, report_file=None):
+        row = DetectionHistory.objects.create(
+            user=user or self.user,
+            detection_type=detection_type,
+            summary=summary or {},
+            report_file=report_file,
+        )
+        if created_at is not None:
+            DetectionHistory.objects.filter(pk=row.pk).update(created_at=created_at)
+            row.refresh_from_db()
+        return row
+
+    def _create_video_task(self, *, user=None, task_id='task-1', status_name='processing', created_at=None, updated_at=None):
+        task = VideoProcessingTask.objects.create(
+            task_id=task_id,
+            user=user or self.user,
+            original_file_name=f'{task_id}.mp4',
+            input_path=f'E:\\tmp\\{task_id}_input.mp4',
+            output_path=f'E:\\tmp\\{task_id}_output.mp4',
+            process_fps=5,
+            status=status_name,
+            progress=100 if status_name == 'completed' else 20,
+            processed_frames=12,
+            total_frames=60,
+            frame_rate=25.0,
+            video_width=1920,
+            video_height=1080,
+            message='ok',
+        )
+        if created_at is not None:
+            updated_at = updated_at or created_at
+            VideoProcessingTask.objects.filter(pk=task.pk).update(created_at=created_at, updated_at=updated_at)
+            task.refresh_from_db()
+        return task
+
+    def test_console_overview_uses_requested_timezone_for_custom_range(self):
+        before_range = datetime(2026, 4, 26, 15, 59, 59, tzinfo=dt_timezone.utc)
+        start_of_day = datetime(2026, 4, 26, 16, 0, 0, tzinfo=dt_timezone.utc)
+        end_of_day = datetime(2026, 4, 27, 15, 59, 59, tzinfo=dt_timezone.utc)
+        after_range = datetime(2026, 4, 27, 16, 0, 0, tzinfo=dt_timezone.utc)
+
+        self._create_history(
+            detection_type='image',
+            created_at=before_range,
+            summary={'total_targets': 99, 'fruit_counts': {'apple': 99}},
+        )
+        self._create_history(
+            detection_type='image',
+            created_at=start_of_day,
+            summary={
+                'total_targets': 3,
+                'fruit_counts': {'apple': 2, 'banana': 1},
+                'ripeness_counts': {'banana': {'ripe': 1}},
+            },
+            report_file='reports/image.json',
+        )
+        self._create_history(
+            detection_type='diameter',
+            created_at=end_of_day,
+            summary={
+                'total_targets': 4,
+                'valid_measurements': 2,
+                'statistics': {
+                    'avg_diameter_mm': 60.0,
+                    'min_diameter_mm': 55.0,
+                    'max_diameter_mm': 66.0,
+                },
+            },
+            report_file='diameter/result.png',
+        )
+        self._create_history(
+            user=self.other_user,
+            detection_type='video',
+            created_at=start_of_day,
+            summary={'total_targets': 77},
+        )
+        self._create_history(
+            detection_type='realtime',
+            created_at=after_range,
+            summary={'total_targets': 88},
+        )
+
+        self._create_video_task(task_id='task-completed', status_name='completed', created_at=start_of_day)
+        self._create_video_task(task_id='task-processing', status_name='processing', created_at=end_of_day)
+        self._create_video_task(user=self.other_user, task_id='task-other', status_name='error', created_at=start_of_day)
+
+        resp = self.client.get(
+            '/api/console/overview/?range_type=custom&start_date=2026-04-27&end_date=2026-04-27&timezone=Asia/Shanghai'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['summary_cards']['detection_count'], 2)
+        self.assertEqual(resp.data['summary_cards']['total_targets'], 7)
+        self.assertEqual(resp.data['summary_cards']['image_detection_count'], 1)
+        self.assertEqual(resp.data['summary_cards']['diameter_detection_count'], 1)
+        self.assertEqual(resp.data['summary_cards']['valid_diameter_measurements'], 2)
+        self.assertEqual(resp.data['summary_cards']['avg_targets_per_record'], 3.5)
+        self.assertEqual(resp.data['trends']['daily_detection_trend'][0]['count'], 2)
+        self.assertEqual(resp.data['trends']['daily_target_trend'][0]['count'], 7)
+        self.assertEqual(resp.data['trends']['daily_type_trend'][0]['image'], 1)
+        self.assertEqual(resp.data['trends']['daily_type_trend'][0]['diameter'], 1)
+        self.assertEqual(resp.data['trends']['daily_avg_diameter_trend'][0]['avg_diameter_mm'], 60.0)
+        self.assertEqual(resp.data['analysis']['fruit_ranking'][0], {'fruit': 'apple', 'count': 2})
+        self.assertEqual(resp.data['analysis']['ripeness_distribution'][0], {'fruit': 'banana', 'ripeness': 'ripe', 'count': 1})
+        self.assertEqual(resp.data['diameter_analysis']['measure_count'], 1)
+        self.assertEqual(resp.data['diameter_analysis']['total_targets'], 4)
+        self.assertEqual(resp.data['diameter_analysis']['valid_measurements'], 2)
+        self.assertEqual(resp.data['diameter_analysis']['success_rate'], 50.0)
+        self.assertEqual(resp.data['diameter_analysis']['avg_diameter_mm'], 60.0)
+        self.assertEqual(resp.data['diameter_analysis']['min_diameter_mm'], 55.0)
+        self.assertEqual(resp.data['diameter_analysis']['max_diameter_mm'], 66.0)
+        self.assertEqual(resp.data['video_task_summary']['total'], 2)
+        self.assertEqual(resp.data['video_task_summary']['completed'], 1)
+        self.assertEqual(resp.data['video_task_summary']['processing'], 1)
+
+    def test_console_recent_returns_latest_items(self):
+        base_time = datetime(2026, 4, 27, 8, 0, 0, tzinfo=dt_timezone.utc)
+        for index in range(12):
+            created_at = base_time + timedelta(minutes=index)
+            self._create_history(
+                detection_type='diameter' if index % 2 else 'image',
+                created_at=created_at,
+                summary={'total_targets': index + 1},
+                report_file=f'reports/{index}.json',
+            )
+
+        for index in range(6):
+            created_at = base_time + timedelta(minutes=index)
+            self._create_video_task(
+                task_id=f'task-{index}',
+                status_name='completed' if index % 2 == 0 else 'processing',
+                created_at=created_at,
+                updated_at=created_at + timedelta(minutes=30),
+            )
+
+        resp = self.client.get(
+            '/api/console/recent/?range_type=custom&start_date=2026-04-27&end_date=2026-04-28&timezone=UTC'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data['recent_histories']), 10)
+        self.assertEqual(len(resp.data['recent_video_tasks']), 5)
+        self.assertEqual(resp.data['recent_histories'][0]['summary']['total_targets'], 12)
+        self.assertEqual(resp.data['recent_video_tasks'][0]['task_id'], 'task-5')
+
+    @patch('fruit_api.services.console_service.get_stereo_calibration_service')
+    @patch('fruit_api.services.console_service.get_measure_runtime_status')
+    @patch('fruit_api.services.console_service.get_stereo_camera_service')
+    def test_console_system_status_aggregates_existing_services(
+        self,
+        mock_get_camera_service,
+        mock_get_runtime_status,
+        mock_get_calibration_service,
+    ):
+        mock_get_camera_service.return_value.status.return_value = {
+            'active': True,
+            'config': {'source_mode': 'single', 'camera_index': 0},
+            'last_open_error': None,
+            'last_frame_ts': 123.0,
+            'consecutive_failures': 0,
+        }
+        mock_get_runtime_status.return_value = {
+            'preferred_device': 'auto',
+            'device_type': 'cuda',
+            'cuda_available': True,
+            'model_loaded': True,
+        }
+        mock_get_calibration_service.return_value.session_status.return_value = {
+            'session_id': '20260427_083000',
+            'pair_count': 12,
+            'pairs': [],
+            'result': {'used_pairs': 12},
+        }
+
+        resp = self.client.get('/api/console/system-status/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['backend_health']['status'], 'ok')
+        self.assertTrue(resp.data['camera_status']['active'])
+        self.assertEqual(resp.data['camera_status']['stream_url'], '/api/camera/stream/')
+        self.assertEqual(resp.data['measure_runtime_status']['device_type'], 'cuda')
+        self.assertIn('calib_path', resp.data['measure_runtime_status'])
+        self.assertEqual(resp.data['calibration_status']['session_id'], '20260427_083000')
+
+    def test_console_overview_rejects_invalid_detection_type(self):
+        resp = self.client.get('/api/console/overview/?detection_type=invalid')
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['status'], 'error')
 
 
 class DetectApiErrorFormatTests(ErrorPayloadAssertMixin, APITestCase):
@@ -540,6 +779,46 @@ class ServiceUnitTests(SimpleTestCase):
         payload = progress_payload(task)
         self.assertIn('report', payload)
         self.assertIn('report_file', payload)
+
+    @patch('fruit_api.services.camera.stereo_camera_service._list_windows_camera_devices')
+    @patch('fruit_api.services.camera.stereo_camera_service._require_cv2')
+    def test_probe_camera_indices_enriches_device_names(self, mock_require_cv2, mock_list_devices):
+        class FakeCapture:
+            def __init__(self, index, _backend):
+                self.index = index
+
+            def isOpened(self):
+                return self.index in {1, 2}
+
+            def read(self):
+                if self.index in {1, 2}:
+                    return True, np.zeros((480, 640, 3), dtype=np.uint8)
+                return False, None
+
+            def get(self, _prop):
+                return 30.0
+
+            def release(self):
+                return None
+
+        mock_require_cv2.return_value = SimpleNamespace(
+            CAP_ANY=0,
+            CAP_PROP_FPS=5,
+            VideoCapture=lambda index, backend: FakeCapture(index, backend),
+        )
+        mock_list_devices.return_value = [
+            {'device_name': 'USB 2.0 Camera A', 'device_status': 'OK'},
+            {'device_name': 'USB 2.0 Camera B', 'device_status': 'OK'},
+        ]
+
+        from fruit_api.services.camera.stereo_camera_service import probe_camera_indices
+
+        payload = probe_camera_indices(max_index=4, backend='CAP_ANY')
+
+        opened = [item for item in payload['results'] if item['opened']]
+        self.assertEqual(opened[0]['device_name'], 'USB 2.0 Camera A')
+        self.assertEqual(opened[1]['device_name'], 'USB 2.0 Camera B')
+        self.assertEqual(payload['pair_results'][0]['left_device_name'], 'USB 2.0 Camera A')
 
     def test_validate_completed_task_raises_for_processing(self):
         task = SimpleNamespace(status='processing')

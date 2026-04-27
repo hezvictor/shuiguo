@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import json
+import subprocess
 import threading
 import time
 from dataclasses import asdict, dataclass
@@ -29,6 +31,123 @@ def _require_cv2():
     except ImportError as exc:
         raise CameraDependencyError("opencv-python is required for camera access") from exc
     return cv2
+
+
+def _list_windows_camera_devices() -> List[Dict[str, str]]:
+    if os.name != "nt":
+        return []
+
+    script = r"""
+    [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+    $devices = Get-CimInstance Win32_PnPEntity | Where-Object {
+      $_.PNPClass -in @('Camera', 'Image') -or $_.Service -eq 'usbvideo'
+    } | Select-Object Name, PNPDeviceID, Status, Service
+    if ($null -eq $devices) {
+      '[]'
+    } else {
+      $devices | ConvertTo-Json -Compress
+    }
+    """
+
+    candidates = [
+        os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
+        "powershell.exe",
+        "pwsh.exe",
+    ]
+    last_error: Optional[Exception] = None
+
+    for executable in candidates:
+        try:
+            completed = subprocess.run(
+                [executable, "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", script],
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="ignore",
+                timeout=8,
+                check=False,
+            )
+        except (FileNotFoundError, OSError, subprocess.SubprocessError) as exc:
+            last_error = exc
+            continue
+
+        if completed.returncode != 0:
+            last_error = RuntimeError(completed.stderr.strip() or completed.stdout.strip() or "powershell failed")
+            continue
+
+        raw = (completed.stdout or "").strip()
+        if not raw:
+            return []
+
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+
+        if isinstance(payload, dict):
+            payload = [payload]
+        if not isinstance(payload, list):
+            return []
+
+        devices: List[Dict[str, str]] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("Name") or "").strip()
+            if not name:
+                continue
+            devices.append(
+                {
+                    "device_name": name,
+                    "device_id": str(item.get("PNPDeviceID") or "").strip(),
+                    "device_status": str(item.get("Status") or "").strip(),
+                    "device_service": str(item.get("Service") or "").strip(),
+                }
+            )
+        return devices
+
+    if last_error:
+        return []
+    return []
+
+
+def _enrich_probe_results_with_device_names(
+    results: List[Dict[str, object]],
+    pair_results: List[Dict[str, object]],
+) -> Tuple[List[Dict[str, object]], List[Dict[str, object]], List[Dict[str, str]]]:
+    device_catalog = _list_windows_camera_devices()
+    if not device_catalog:
+        return results, pair_results, []
+
+    preferred_devices = [item for item in device_catalog if item.get("device_status", "").upper() == "OK"] or device_catalog
+    opened_results = [item for item in results if item.get("opened")]
+    name_map: Dict[int, Dict[str, str]] = {}
+
+    for device_info, result in zip(preferred_devices, opened_results):
+        camera_index = int(result["camera_index"])
+        name_map[camera_index] = device_info
+
+    enriched_results: List[Dict[str, object]] = []
+    for item in results:
+        enriched = dict(item)
+        device_info = name_map.get(int(item["camera_index"]))
+        if device_info:
+            enriched.update(device_info)
+            enriched["device_name_inferred"] = True
+        enriched_results.append(enriched)
+
+    enriched_pairs: List[Dict[str, object]] = []
+    for item in pair_results:
+        enriched = dict(item)
+        left_info = name_map.get(int(item["left_camera_index"]))
+        right_info = name_map.get(int(item["right_camera_index"]))
+        if left_info:
+            enriched["left_device_name"] = left_info["device_name"]
+        if right_info:
+            enriched["right_device_name"] = right_info["device_name"]
+        enriched_pairs.append(enriched)
+
+    return enriched_results, enriched_pairs, preferred_devices
 
 
 @dataclass
@@ -456,12 +575,14 @@ def probe_camera_indices(max_index: int = 4, backend: Optional[str] = None) -> D
         left_capture.release()
         right_capture.release()
 
+    results, pair_results, device_catalog = _enrich_probe_results_with_device_names(results, pair_results)
     successful_pairs = [item for item in pair_results if item["simultaneous_ok"]]
     return {
         "backend": effective_backend or "CAP_ANY",
         "max_index": int(max_index),
         "results": results,
         "pair_results": pair_results,
+        "device_catalog": device_catalog,
         "opened_count": len(opened_results),
         "recommended_dual_pair": [
             successful_pairs[0]["left_camera_index"],

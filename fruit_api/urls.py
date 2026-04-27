@@ -62,6 +62,11 @@ urlpatterns = [
                 path('video/cleanup/<str:task_id>/', views.video_cleanup, name='video_cleanup'),
                 path('video/report/<str:task_id>/', views.video_report, name='video_report'),
 
+                # Console
+                path('console/overview/', views.console_overview, name='console_overview'),
+                path('console/recent/', views.console_recent, name='console_recent'),
+                path('console/system-status/', views.console_system_status, name='console_system_status'),
+
                 # Detection history
                 path('detection/history/', views.DetectionHistoryListView.as_view(), name='detection_history'),
                 path('detection/history/<int:pk>/', views.DetectionHistoryDetailView.as_view(), name='detection_history_detail'),

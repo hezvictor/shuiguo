@@ -27,6 +27,11 @@ from fruit_api.views_modules.camera_views import (  # noqa: F401
     camera_stop,
     camera_stream,
 )
+from fruit_api.views_modules.console_views import (  # noqa: F401
+    console_overview,
+    console_recent,
+    console_system_status,
+)
 from fruit_api.views_modules.detect_views import (  # noqa: F401
     predict_ripeness_by_type,
     predict_view,
@@ -78,6 +83,9 @@ __all__ = [
     'camera_stream',
     'camera_measure_current',
     'measure_runtime_status',
+    'console_overview',
+    'console_recent',
+    'console_system_status',
     'predict_view',
     'predict_with_ripeness',
     'predict_ripeness_by_type',

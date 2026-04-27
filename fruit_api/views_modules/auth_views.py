@@ -94,7 +94,7 @@ def api_login_view(request):
                 'status': 'success',
                 'message': '登录成功',
                 'user': user_to_dto(user).to_dict(),
-                'redirect': '/dashboard',
+                'redirect': '/console',
             }
         )
     except AuthValidationError as exc:

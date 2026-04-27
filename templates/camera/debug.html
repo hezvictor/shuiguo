@@ -17,10 +17,11 @@
             --panel: #111827;
             --panel-alt: #1f2937;
             --text: #e5e7eb;
-            --muted: #9ca3af;
+            --muted: #94a3b8;
             --accent: #f59e0b;
             --danger: #ef4444;
             --ok: #10b981;
+            --info: #2563eb;
             --font-ui: 'AppSimHei', 'SimHei', sans-serif;
         }
 
@@ -29,10 +30,10 @@
         body {
             margin: 0;
             font-family: var(--font-ui);
-            background:
-                radial-gradient(circle at top left, rgba(245, 158, 11, 0.18), transparent 28%),
-                linear-gradient(135deg, var(--bg), #020617);
             color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(245, 158, 11, 0.16), transparent 28%),
+                linear-gradient(135deg, #0f172a, #020617);
         }
 
         input,
@@ -50,13 +51,13 @@
 
         .grid {
             display: grid;
-            gap: 20px;
             grid-template-columns: 360px 1fr;
+            gap: 20px;
         }
 
         .card {
             background: rgba(17, 24, 39, 0.92);
-            border: 1px solid rgba(156, 163, 175, 0.15);
+            border: 1px solid rgba(148, 163, 184, 0.15);
             border-radius: 20px;
             overflow: hidden;
             backdrop-filter: blur(12px);
@@ -70,8 +71,10 @@
         }
 
         .card p {
-            padding: 0 20px;
+            margin: 0;
+            padding: 8px 20px 0;
             color: var(--muted);
+            line-height: 1.7;
         }
 
         .panel-body {
@@ -89,14 +92,17 @@
             font-size: 14px;
         }
 
-        input, select, button {
-            border: 1px solid rgba(156, 163, 175, 0.2);
+        input,
+        select,
+        button {
+            border: 1px solid rgba(148, 163, 184, 0.2);
             border-radius: 12px;
             padding: 10px 12px;
             font-size: 14px;
         }
 
-        input, select {
+        input,
+        select {
             background: var(--panel-alt);
             color: var(--text);
         }
@@ -107,9 +113,9 @@
         }
 
         .primary { background: var(--accent); color: #111827; }
-        .ghost { background: transparent; color: var(--text); }
         .danger { background: var(--danger); color: #fff; }
         .ok { background: var(--ok); color: #052e16; }
+        .info { background: var(--info); color: #eff6ff; }
 
         .button-row {
             display: grid;
@@ -119,6 +125,13 @@
 
         .button-row.full {
             grid-template-columns: 1fr;
+        }
+
+        .help-note {
+            margin-top: 10px;
+            font-size: 13px;
+            color: var(--muted);
+            line-height: 1.6;
         }
 
         .preview-wrap {
@@ -134,7 +147,7 @@
             background: #020617;
             border-radius: 16px;
             overflow: hidden;
-            border: 1px solid rgba(156, 163, 175, 0.12);
+            border: 1px solid rgba(148, 163, 184, 0.12);
         }
 
         .preview-frame img {
@@ -143,14 +156,16 @@
             height: auto;
         }
 
-        .status, .result {
+        .status,
+        .result {
             white-space: pre-wrap;
             font-family: var(--font-ui), Consolas, monospace;
             font-size: 13px;
             background: rgba(2, 6, 23, 0.65);
             border-radius: 14px;
             padding: 14px;
-            border: 1px solid rgba(156, 163, 175, 0.12);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+            line-height: 1.6;
         }
 
         .inline-check {
@@ -159,9 +174,103 @@
             gap: 8px;
         }
 
+        .modal {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            background: rgba(2, 6, 23, 0.72);
+            z-index: 1000;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-card {
+            width: min(720px, 100%);
+            max-height: min(88vh, 900px);
+            overflow-y: auto;
+            background: linear-gradient(180deg, rgba(17, 24, 39, 0.98), rgba(15, 23, 42, 0.98));
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            border-radius: 22px;
+            box-shadow: 0 30px 60px rgba(0, 0, 0, 0.35);
+        }
+
+        .modal-head {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 20px 20px 8px;
+        }
+
+        .modal-head h3 {
+            margin: 0;
+            font-size: 22px;
+        }
+
+        .modal-close {
+            min-width: 44px;
+            min-height: 44px;
+            padding: 0;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, 0.12);
+            color: var(--text);
+        }
+
+        .modal-body {
+            padding: 0 20px 20px;
+            color: var(--text);
+            line-height: 1.8;
+        }
+
+        .modal-body p {
+            margin: 0 0 14px;
+            padding: 0;
+            color: var(--text);
+        }
+
+        .guide-block {
+            margin-top: 16px;
+            padding: 16px;
+            border-radius: 16px;
+            background: rgba(30, 41, 59, 0.68);
+            border: 1px solid rgba(148, 163, 184, 0.12);
+        }
+
+        .guide-block h4 {
+            margin: 0 0 10px;
+            font-size: 16px;
+            color: #f8fafc;
+        }
+
+        .guide-block ol,
+        .guide-block ul {
+            margin: 0;
+            padding-left: 22px;
+        }
+
+        .guide-block li {
+            margin-bottom: 8px;
+            color: #dbe4f0;
+        }
+
+        .guide-tip {
+            margin-top: 14px;
+            padding: 12px 14px;
+            border-radius: 14px;
+            background: rgba(245, 158, 11, 0.12);
+            color: #fde68a;
+            border: 1px solid rgba(245, 158, 11, 0.18);
+        }
+
         @media (max-width: 960px) {
             .grid { grid-template-columns: 1fr; }
             .preview-frame { min-height: 280px; }
+            .button-row { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -170,7 +279,7 @@
     <div class="grid">
         <section class="card">
             <h1>双目摄像头调试</h1>
-            <p>先在这里确认摄像头能打开、双目画面能显示，再继续接前端正式页面。</p>
+            <p>先在这里确认摄像头能正常打开、双目画面能正确显示，再进行果径测量。这个页面适合联调和排查相机、预览、测量流程是否正常。</p>
             <div class="panel-body">
                 <div class="fields">
                     <label>
@@ -213,7 +322,7 @@
                     </label>
                     <label class="inline-check">
                         <input id="detectToggle" type="checkbox">
-                        预览时叠加 YOLO 框
+                        预览时叠加 YOLO 检测框
                     </label>
                 </div>
 
@@ -221,11 +330,13 @@
                     <button class="primary" id="startBtn">启动摄像头</button>
                     <button class="danger" id="stopBtn">停止摄像头</button>
                 </div>
-                <div class="button-row full" style="margin-top: 10px;">
+                <div class="button-row" style="margin-top: 10px;">
                     <button class="ok" id="measureBtn">抓取当前双目帧并测果径</button>
+                    <button class="info" id="usageBtn">使用说明</button>
                 </div>
+                <div class="help-note">第一次使用建议先点击“使用说明”。里面包含新手操作步骤、结果怎么看，以及一段非常简短的测量原理说明。</div>
 
-                <h2 style="padding-left: 0; padding-top: 24px;">状态</h2>
+                <h2 style="padding-left: 0; padding-top: 24px;">当前状态</h2>
                 <div class="status" id="statusBox">等待启动</div>
 
                 <h2 style="padding-left: 0; padding-top: 24px;">测量结果</h2>
@@ -235,13 +346,56 @@
 
         <section class="card">
             <h2>实时预览</h2>
-            <p>启动成功后，这里会显示左右相机拼接画面。</p>
+            <p>启动成功后，这里会显示双目摄像头当前画面。建议在点击测量前先确认水果完整、清晰，并尽量位于画面中央。</p>
             <div class="preview-wrap">
                 <div class="preview-frame">
                     <img id="previewImage" alt="camera preview">
                 </div>
             </div>
         </section>
+    </div>
+</div>
+
+<div class="modal" id="usageModal" aria-hidden="true">
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="usageTitle">
+        <div class="modal-head">
+            <h3 id="usageTitle">果径测量使用说明</h3>
+            <button class="modal-close" id="closeUsageBtn" type="button" aria-label="关闭">×</button>
+        </div>
+        <div class="modal-body">
+            <p>这个页面用于用双目相机抓取当前画面，并自动估计水果的横向直径。第一次使用时，按下面的顺序操作就可以。</p>
+
+            <div class="guide-block">
+                <h4>怎么用</h4>
+                <ol>
+                    <li>先把双目摄像头接好，确认左右画面都正常，水果能同时出现在两个镜头里。</li>
+                    <li>根据你的设备选择输入模式：如果是一台相机输出左右拼接画面，选“单设备双目”；如果是两台相机分别拍摄，选“双设备双摄”。</li>
+                    <li>点击“启动摄像头”，先看右侧实时预览，确认画面清晰、没有明显卡顿，水果没有被裁掉。</li>
+                    <li>把水果放在镜头前，尽量让水果位于画面中间，避免离镜头太近或太远。</li>
+                    <li>保持水果和相机短暂稳定，然后点击“抓取当前双目帧并测果径”。</li>
+                    <li>等待结果返回后，在“测量结果”区域查看每个水果的测量值。通常单位是毫米，数值越大表示果径越大。</li>
+                </ol>
+            </div>
+
+            <div class="guide-block">
+                <h4>结果怎么看</h4>
+                <ul>
+                    <li>如果画面里检测到多个水果，系统会分别给出每个目标的测量结果。</li>
+                    <li>如果提示没有检测到水果，通常是水果没有完整进入画面，或者当前角度、光照不适合识别。</li>
+                    <li>如果结果波动较大，先检查相机是否晃动、左右画面是否对齐，以及水果边缘是否清晰。</li>
+                </ul>
+            </div>
+
+            <div class="guide-block">
+                <h4>简短原理</h4>
+                <p>系统会先利用双目图像恢复水果与相机之间的空间深度，再识别出水果在图像中的位置，最后在水果左右边缘之间计算真实空间距离，把这个距离作为果径估计值。</p>
+                <p>可以简单理解为：先看出“水果在哪里、离相机多远”，再把图像里的宽度换算成现实中的宽度。</p>
+            </div>
+
+            <div class="guide-tip">
+                为了更容易测准：尽量使用稳定光照、保持镜头清洁、让水果正对镜头，并优先把水果放在画面中央区域。
+            </div>
+        </div>
     </div>
 </div>
 
@@ -295,6 +449,12 @@
 
     function setResult(data) {
         document.getElementById('resultBox').textContent = JSON.stringify(data, null, 2);
+    }
+
+    function toggleUsageModal(show) {
+        const modal = document.getElementById('usageModal');
+        modal.classList.toggle('show', show);
+        modal.setAttribute('aria-hidden', show ? 'false' : 'true');
     }
 
     async function loadStatus() {
@@ -353,6 +513,26 @@
             setResult(data);
         } catch (error) {
             setResult({ status: 'error', error: error.message });
+        }
+    });
+
+    document.getElementById('usageBtn').addEventListener('click', () => {
+        toggleUsageModal(true);
+    });
+
+    document.getElementById('closeUsageBtn').addEventListener('click', () => {
+        toggleUsageModal(false);
+    });
+
+    document.getElementById('usageModal').addEventListener('click', (event) => {
+        if (event.target.id === 'usageModal') {
+            toggleUsageModal(false);
+        }
+    });
+
+    document.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') {
+            toggleUsageModal(false);
         }
     });
 
