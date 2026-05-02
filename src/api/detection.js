@@ -1,6 +1,41 @@
 // src/api/detection.js
 import request from '@/utils/request'
 
+export function createImageDetectionTask(formData) {
+  return request({
+    url: '/api/image-detection/tasks/',
+    method: 'post',
+    data: formData,
+    headers: { 'Content-Type': 'multipart/form-data' },
+    timeout: 300000
+  })
+}
+
+export function getDetectionHistoryList(params = {}) {
+  return request({
+    url: '/api/detection/history/',
+    method: 'get',
+    params,
+    timeout: 15000
+  })
+}
+
+export function getDetectionHistoryDetail(id) {
+  return request({
+    url: `/api/detection/history/${id}/`,
+    method: 'get',
+    timeout: 15000
+  })
+}
+
+export function deleteDetectionHistory(id) {
+  return request({
+    url: `/api/detection/history/${id}/`,
+    method: 'delete',
+    timeout: 15000
+  })
+}
+
 export function detectImage(formData) {
   return request({
     url: '/api/yolo_detect_info/',
@@ -115,6 +150,32 @@ export function getCameraStatus() {
   })
 }
 
+export function getCameraRegistry() {
+  return request({
+    url: '/api/camera/registry/',
+    method: 'get',
+    timeout: 10000
+  })
+}
+
+export function scanCameraRegistry(data = {}) {
+  return request({
+    url: '/api/camera/registry/scan/',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function updateCameraSelection(data) {
+  return request({
+    url: '/api/camera/registry/select/',
+    method: 'post',
+    data,
+    timeout: 15000
+  })
+}
+
 export function probeCameraIndices(maxIndex = 4) {
   return request({
     url: `/api/camera/probe/?max_index=${maxIndex}`,
@@ -138,6 +199,43 @@ export function stopStereoCamera() {
     method: 'post',
     data: {},
     timeout: 10000
+  })
+}
+
+export function captureCameraImages(data) {
+  return request({
+    url: '/api/camera/capture/',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
+export function getCameraCaptures(params = {}) {
+  return request({
+    url: '/api/camera/captures/',
+    method: 'get',
+    params,
+    timeout: 15000
+  })
+}
+
+export function downloadCameraCaptures(data) {
+  return request({
+    url: '/api/camera/captures/download/',
+    method: 'post',
+    data,
+    responseType: 'blob',
+    timeout: 120000
+  })
+}
+
+export function detectRealtimeCurrentFrame(data) {
+  return request({
+    url: '/api/realtime/detect/current-frame/',
+    method: 'post',
+    data,
+    timeout: 300000
   })
 }
 

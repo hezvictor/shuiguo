@@ -92,9 +92,9 @@
             <span>实时检测</span>
           </el-menu-item>
 
-          <el-menu-item index="/detection/diameter">
+          <el-menu-item index="/camera/config">
             <el-icon><DataAnalysis /></el-icon>
-            <span>果径测量</span>
+            <span>摄像头配置</span>
           </el-menu-item>
         </el-sub-menu>
 

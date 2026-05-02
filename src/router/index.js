@@ -45,9 +45,9 @@ const routes = [
         component: () => import('../views/RealtimeDetectionView.vue')
       },
       {
-        path: '/detection/diameter',
-        name: 'diameterMeasurement',
-        component: () => import('../views/DiameterMeasurementView.vue')
+        path: '/camera/config',
+        name: 'cameraConfig',
+        component: () => import('../views/CameraConfigView.vue')
       },
       {
         path: '/history',

@@ -22,9 +22,33 @@ const request = axios.create({
   withCredentials: true
 })
 
+let csrfBootstrapPromise = null
+
+async function ensureCsrfCookie() {
+  if (getCookie('csrftoken')) {
+    return getCookie('csrftoken')
+  }
+  if (!csrfBootstrapPromise) {
+    csrfBootstrapPromise = fetch('/api/csrf/', {
+      method: 'GET',
+      credentials: 'include'
+    })
+      .then(() => getCookie('csrftoken'))
+      .finally(() => {
+        csrfBootstrapPromise = null
+      })
+  }
+  return csrfBootstrapPromise
+}
+
 request.interceptors.request.use(
-  (config) => {
-    const csrftoken = getCookie('csrftoken')
+  async (config) => {
+    const method = String(config.method || 'get').toUpperCase()
+    const isSafeMethod = ['GET', 'HEAD', 'OPTIONS', 'TRACE'].includes(method)
+    let csrftoken = getCookie('csrftoken')
+    if (!isSafeMethod && !csrftoken) {
+      csrftoken = await ensureCsrfCookie()
+    }
     if (csrftoken) {
       config.headers['X-CSRFToken'] = csrftoken
     }

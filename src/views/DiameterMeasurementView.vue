@@ -224,6 +224,15 @@
                 </div>
               </div>
 
+              <el-alert
+                v-if="measurementResult.linked_image_history"
+                title="本次双目测量已同步写入图片检测任务，可在图片检测页和检测历史中查看。"
+                type="success"
+                :closable="false"
+                show-icon
+                style="margin-bottom: 16px"
+              />
+
               <el-table :data="measurementTargets" stripe border size="small" class="target-table">
                 <el-table-column prop="index" label="#" width="60">
                   <template #default="scope">
@@ -251,6 +260,10 @@
 
               <div v-if="resultImageUrl" class="result-image-wrap">
                 <img :src="resultImageUrl" alt="measurement visualization" class="result-image" />
+              </div>
+              <div v-if="measurementResult.linked_image_history" class="linked-history-actions">
+                <el-button type="primary" @click="$router.push('/detection/image')">查看图片检测页</el-button>
+                <el-button @click="$router.push('/history')">查看检测历史</el-button>
               </div>
             </template>
 
@@ -385,6 +398,18 @@
                   <div class="toggle-pill">
                     <span>测量后保存结果图</span>
                     <el-switch v-model="form.save_vis" />
+                  </div>
+                  <div class="toggle-pill">
+                    <span>同步写入图片检测任务</span>
+                    <el-switch v-model="form.save_as_image_task" />
+                  </div>
+                  <div class="toggle-pill">
+                    <span>相机任务做种类识别</span>
+                    <el-switch v-model="form.detect_classification" />
+                  </div>
+                  <div class="toggle-pill">
+                    <span>相机任务做熟度识别</span>
+                    <el-switch v-model="form.detect_ripeness" />
                   </div>
                 </div>
               </el-form>
@@ -684,7 +709,10 @@ export default {
         frame_height: null,
         fps: null,
         conf: 0.25,
-        save_vis: true
+        save_vis: true,
+        save_as_image_task: true,
+        detect_classification: true,
+        detect_ripeness: false
       },
       calibrationForm: {
         cols: 9,
@@ -1244,11 +1272,17 @@ export default {
     async measureCurrentFrame() {
       this.measuring = true
       this.errorMessage = ''
+      if (this.form.detect_ripeness) {
+        this.form.detect_classification = true
+      }
       this.startMeasureTimer()
       try {
         const data = await measureCurrentStereoFrame({
           conf: this.form.conf,
-          save_vis: this.form.save_vis
+          save_vis: this.form.save_vis,
+          save_as_image_task: this.form.save_as_image_task,
+          detect_classification: this.form.detect_classification,
+          detect_ripeness: this.form.detect_ripeness
         })
         this.measurementResult = data
         this.resultImageUrl = this.resolveMediaUrl(
@@ -1716,6 +1750,13 @@ export default {
   border-radius: 20px;
   overflow: hidden;
   border: 1px solid rgba(148, 163, 184, 0.18);
+}
+
+.linked-history-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
 }
 
 .empty-state {

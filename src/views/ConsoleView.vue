@@ -501,7 +501,7 @@ export default {
         { path: '/detection/image', label: '图片检测', desc: '上传单张图片并生成结果报告' },
         { path: '/detection/video', label: '视频检测', desc: '提交视频任务并查看处理进度' },
         { path: '/detection/realtime', label: '实时检测', desc: '保存实时识别结果到检测历史' },
-        { path: '/detection/diameter', label: '果径测量', desc: '进入双目测量工作台' },
+        { path: '/camera/config', label: '摄像头配置', desc: '扫描相机、设置单摄/双摄方案并测试拍照下载' },
         { path: '/history', label: '检测历史', desc: '查看详细报告、筛选并下载结果' }
       ],
       typeColors: TYPE_COLORS,

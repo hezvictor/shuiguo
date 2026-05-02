@@ -6,14 +6,15 @@
           <p class="eyebrow">Realtime Detection Workspace</p>
           <h1>实时检测</h1>
           <p class="hero-text">
-            启动浏览器摄像头后，系统会通过 WebSocket 持续上传画面并识别水果。你可以随时开始、暂停、保存当前会话报告。
+            这里复用摄像头配置页保存的全局设备方案。预览画面通过 WebSocket 持续展示实时摄像头画面，
+            定时检测只更新识别结果，不再把拍照截图当作实时画面。
           </p>
         </div>
 
-        <div class="hero-status">
-          <div class="hero-badge">摄像头：{{ isStreaming ? '运行中' : '未启动' }}</div>
-          <div class="hero-badge">连接：{{ isConnected ? '已连接' : '未连接' }}</div>
-          <div class="hero-badge">识别：{{ isProcessing ? '进行中' : '已停止' }}</div>
+        <div class="hero-badges">
+          <span class="hero-badge">当前模式：{{ modeText }}</span>
+          <span class="hero-badge">检测间隔：{{ intervalMs }} ms</span>
+          <span class="hero-badge">运行状态：{{ isRunning ? '检测中' : '未启动' }}</span>
         </div>
       </section>
 
@@ -21,175 +22,212 @@
         <article class="guide-step">
           <span class="guide-index">1</span>
           <div>
-            <h3>启动摄像头</h3>
-            <p>允许浏览器访问摄像头后，系统会显示实时取景画面。</p>
+            <h3>先配置摄像头</h3>
+            <p>首次使用请先到摄像头配置页扫描设备，并保存单摄或双摄默认方案。</p>
           </div>
         </article>
         <article class="guide-step">
           <span class="guide-index">2</span>
           <div>
-            <h3>开始识别</h3>
-            <p>开始后会持续识别水果和成熟度，并在画面中绘制结果。</p>
+            <h3>启动摄像头预览</h3>
+            <p>点击启动摄像头后，页面会通过 WebSocket 持续显示当前模式对应的实时画面。</p>
           </div>
         </article>
         <article class="guide-step">
           <span class="guide-index">3</span>
           <div>
-            <h3>保存或下载会话</h3>
-            <p>当前会话可保存到历史，也可以导出当前统计报告。</p>
+            <h3>开始实时检测</h3>
+            <p>检测循环会按间隔抓取当前帧，并把本次会话的统计结果累积到右侧面板。</p>
           </div>
         </article>
       </section>
 
-      <div v-if="errorMessage" class="error-banner">
-        <strong>运行异常</strong>
-        <span>{{ errorMessage }}</span>
-      </div>
+      <el-alert
+        v-if="errorMessage"
+        :title="errorMessage"
+        type="error"
+        show-icon
+        :closable="true"
+        @close="errorMessage = ''"
+      />
 
       <section class="workspace-grid">
         <div class="workspace-main">
           <section class="panel-card">
             <div class="panel-header">
               <div>
-                <h2>实时画面</h2>
-                <p>这里显示摄像头预览和识别框，右上角会同步显示识别帧率。</p>
+                <h2>检测模式与设备</h2>
+                <p>这里展示实时检测当前使用的全局摄像头方案，也可以直接刷新设备列表并同步到全局。</p>
               </div>
-              <span class="panel-badge">{{ fps }} fps</span>
             </div>
 
-            <div class="video-wrapper">
-              <video ref="videoElement" class="video-preview" autoplay playsinline muted></video>
-              <canvas ref="canvasElement" class="overlay-canvas"></canvas>
-            </div>
+            <div class="form-grid">
+              <el-form label-position="top">
+                <el-form-item label="检测模式">
+                  <el-radio-group v-model="mode" @change="handleModeChange">
+                    <el-radio-button label="single">单摄种类/成熟度</el-radio-button>
+                    <el-radio-button label="dual">双摄果径检测</el-radio-button>
+                  </el-radio-group>
+                </el-form-item>
 
-            <div class="camera-picker">
-              <div class="camera-picker__header">
-                <strong>浏览器摄像头</strong>
-                <button type="button" class="mini-btn" @click="loadCameraDevices(true)" :disabled="cameraScanLoading">
-                  {{ cameraScanLoading ? '刷新中...' : '刷新列表' }}
-                </button>
-              </div>
-              <div class="camera-picker__row">
-                <select v-model="selectedCameraId" class="camera-select" @change="onCameraSelectionChange">
-                  <option value="">默认摄像头</option>
-                  <option v-for="camera in availableCameras" :key="camera.deviceId" :value="camera.deviceId">
-                    {{ camera.label }}
-                  </option>
-                </select>
-                <span class="camera-picker__hint">
-                  {{ isStreaming ? '修改后需重新启动摄像头才会生效。' : '启动时会使用当前选中的摄像头。' }}
-                </span>
-              </div>
+                <el-form-item label="检测间隔 (ms)">
+                  <div class="interval-row">
+                    <el-input-number v-model="intervalMs" :min="500" :step="500" />
+                    <el-button @click="applySuggestedInterval">使用建议默认值</el-button>
+                  </div>
+                </el-form-item>
+
+                <el-form-item v-if="mode === 'single'" label="单摄检测选项">
+                  <div class="checkbox-row">
+                    <el-checkbox v-model="detectClassification">执行种类识别</el-checkbox>
+                    <el-checkbox v-model="detectRipeness">执行成熟度识别</el-checkbox>
+                  </div>
+                </el-form-item>
+
+                <el-form-item label="当前全局相机方案">
+                  <div class="selection-summary">
+                    <p>默认单摄：{{ singleCameraLabel }}</p>
+                    <p>默认双摄：{{ dualPairLabel }}</p>
+                    <p>预览设备：{{ previewCameraText }}</p>
+                    <p>预览连接：{{ previewConnected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}</p>
+                  </div>
+                </el-form-item>
+              </el-form>
             </div>
 
             <div class="action-row">
-              <button type="button" class="btn btn-primary" @click="startCamera" :disabled="isStreaming || cameraLoading">
-                {{ cameraLoading ? '启动中...' : '启动摄像头' }}
-              </button>
-              <button type="button" class="btn btn-danger" @click="stopCamera" :disabled="!isStreaming">
+              <el-button type="primary" :loading="scanning" @click="refreshDevices">刷新设备并同步全局</el-button>
+              <el-button @click="goToCameraConfig">前往摄像头配置页</el-button>
+              <el-button type="primary" :disabled="previewEnabled || !canStartPreview" @click="startPreview">
+                启动摄像头
+              </el-button>
+              <el-button type="warning" :disabled="!previewEnabled" @click="stopPreview">
                 停止摄像头
-              </button>
-              <button
-                type="button"
-                class="btn"
-                :class="isProcessing ? 'btn-warning' : 'btn-success'"
-                @click="toggleProcessing"
-                :disabled="!isStreaming || !isConnected || processingLoading"
-              >
-                {{ isProcessing ? '暂停识别' : '开始识别' }}
-              </button>
-              <button type="button" class="btn btn-secondary" @click="saveCurrentReport" :disabled="!hasHistory || saving">
-                {{ saving ? '保存中...' : '保存本次记录' }}
-              </button>
-              <button type="button" class="btn btn-secondary" @click="resetStatistics" :disabled="!hasHistory">
-                重置统计
-              </button>
-              <button type="button" class="btn btn-secondary" @click="generateReport" :disabled="!hasHistory">
-                下载报告
-              </button>
-            </div>
-
-            <div class="status-row">
-              <span class="status-chip" :class="{ active: isStreaming }">摄像头 {{ isStreaming ? '运行中' : '未启动' }}</span>
-              <span class="status-chip" :class="{ active: isConnected }">WebSocket {{ isConnected ? '已连接' : '未连接' }}</span>
-              <span class="status-chip" :class="{ warning: isProcessing }">识别 {{ isProcessing ? '进行中' : '已停止' }}</span>
-              <span v-if="statistics.total_targets > 0" class="status-chip neutral">已检测总数 {{ statistics.total_targets }}</span>
-            </div>
-          </section>
-
-          <section v-if="currentResults.length > 0" class="panel-card">
-            <div class="panel-header">
-              <div>
-                <h2>当前识别结果</h2>
-                <p>这里展示最近一帧中识别到的水果和成熟度。</p>
-              </div>
-            </div>
-
-            <div class="result-grid">
-              <div v-for="(res, idx) in currentResults" :key="idx" class="result-item">
-                <div class="result-head">
-                  <span class="fruit-name">{{ getFruitIcon(res.fruit_class) }} {{ res.fruit_class }}</span>
-                  <span class="confidence">{{ (res.fruit_confidence * 100).toFixed(1) }}%</span>
-                </div>
-                <div v-if="res.ripeness" class="ripeness-line">
-                  成熟度：{{ res.ripeness.class }} ({{ (res.ripeness.confidence * 100).toFixed(1) }}%)
-                </div>
-                <div class="bbox-line">位置：[{{ res.bbox.join(', ') }}]</div>
-              </div>
-            </div>
-          </section>
-        </div>
-
-        <div class="workspace-side">
-          <section v-if="statistics.total_targets > 0" class="panel-card">
-            <div class="panel-header">
-              <div>
-                <h2>本次识别统计</h2>
-                <p>统计当前会话中累计识别到的水果与成熟度分布。</p>
-              </div>
-            </div>
-
-            <div class="stats-block">
-              <h3>水果种类次数</h3>
-              <div v-for="(item, idx) in sortedFruitStats" :key="item.fruit" class="stat-item">
-                <div class="stat-top">
-                  <span>{{ idx + 1 }}. {{ item.fruit }}</span>
-                  <span>{{ item.count }}</span>
-                </div>
-                <div class="stat-bar">
-                  <div class="stat-fill" :style="{ width: getPercentage(item.count, statistics.total_targets) + '%' }"></div>
-                </div>
-              </div>
-            </div>
-
-            <div v-if="sortedRipenessData.length" class="stats-block">
-              <h3>成熟度分布</h3>
-              <div v-for="item in sortedRipenessData" :key="`${item.fruit}-${item.ripeness}`" class="stat-item">
-                <div class="stat-top">
-                  <span>{{ item.fruit }} - {{ item.ripeness }}</span>
-                  <span>{{ item.count }}</span>
-                </div>
-                <div class="stat-bar">
-                  <div class="stat-fill alt" :style="{ width: getPercentage(item.count, getFruitTotal(item.fruit)) + '%' }"></div>
-                </div>
-              </div>
+              </el-button>
+              <el-button type="success" :disabled="isRunning" :loading="runningRequest" @click="startLoop">
+                开始实时检测
+              </el-button>
+              <el-button type="warning" :disabled="!isRunning" @click="stopLoop">停止检测</el-button>
+              <el-button :disabled="!sessionSummary.total_targets || saving" :loading="saving" @click="saveSessionReport">
+                保存本次会话
+              </el-button>
             </div>
           </section>
 
           <section class="panel-card">
             <div class="panel-header">
               <div>
-                <h2>使用说明</h2>
-                <p>第一次使用时按下面顺序操作即可。</p>
+                <h2>实时摄像头画面</h2>
+                <p>该区域通过 WebSocket 连续展示当前模式对应的实时预览画面。</p>
+              </div>
+              <span class="panel-badge">{{ lastDetectTime }}</span>
+            </div>
+
+            <div class="frame-stage">
+              <img v-if="previewImageUrl" :src="previewImageUrl" alt="realtime preview" class="frame-image" />
+              <div v-else class="frame-placeholder">
+                <h3>{{ previewEnabled ? '等待预览画面' : '摄像头未启动' }}</h3>
+                <p>
+                  {{ previewEnabled
+                    ? 'WebSocket 已建立，正在等待摄像头返回画面。'
+                    : '请先点击“启动摄像头”，再开始实时检测。' }}
+                </p>
               </div>
             </div>
 
-            <ul class="tips-list">
-              <li>先启动摄像头，确认取景区域内水果清晰可见。</li>
-              <li>点击“开始识别”后，系统会持续识别并更新右侧统计。</li>
-              <li>如果要开始新一轮统计，可点击“重置统计”。</li>
-              <li>本次会话可保存到历史，也可以直接下载 JSON 报告。</li>
-            </ul>
+            <p v-if="previewErrorMessage" class="preview-error">{{ previewErrorMessage }}</p>
+          </section>
+
+          <section v-if="currentTargets.length" class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2>最近一次检测结果</h2>
+                <p>单摄模式显示水果种类和成熟度，双摄模式显示果径与识别结果。</p>
+              </div>
+            </div>
+
+            <div class="result-grid">
+              <article v-for="(target, index) in currentTargets" :key="`target-${index}`" class="result-item">
+                <div class="result-head">
+                  <strong>{{ targetTitle(target) }}</strong>
+                  <span>{{ targetConfidence(target) }}</span>
+                </div>
+                <p>位置：{{ formatBbox(target.bbox) }}</p>
+                <p v-if="mode === 'single' && target.ripeness">
+                  成熟度：{{ target.ripeness.class }} ({{ formatPercent(target.ripeness.confidence) }})
+                </p>
+                <p v-if="mode === 'dual' && target.classification">
+                  种类：{{ target.classification.class }} ({{ formatPercent(target.classification.confidence) }})
+                </p>
+                <p v-if="mode === 'dual' && target.ripeness">
+                  成熟度：{{ target.ripeness.class }} ({{ formatPercent(target.ripeness.confidence) }})
+                </p>
+                <p v-if="mode === 'dual'">
+                  果径：
+                  {{
+                    target.diameter?.distance_mm !== null && target.diameter?.distance_mm !== undefined
+                      ? `${target.diameter.distance_mm.toFixed(2)} mm`
+                      : '-'
+                  }}
+                </p>
+              </article>
+            </div>
+          </section>
+        </div>
+
+        <div class="workspace-side">
+          <section class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2>本次会话统计</h2>
+                <p>这里累积展示当前实时检测会话的识别数量、成熟度和果径统计。</p>
+              </div>
+            </div>
+
+            <div class="stats-grid">
+              <div class="metric-box">
+                <span>累计目标数</span>
+                <strong>{{ sessionSummary.total_targets }}</strong>
+              </div>
+              <div class="metric-box">
+                <span>采样次数</span>
+                <strong>{{ sessionSummary.sample_count }}</strong>
+              </div>
+              <div v-if="mode === 'dual'" class="metric-box">
+                <span>有效果径数</span>
+                <strong>{{ sessionSummary.valid_measurements }}</strong>
+              </div>
+              <div v-if="mode === 'dual'" class="metric-box">
+                <span>平均果径</span>
+                <strong>{{ diameterMetric('avg') }}</strong>
+              </div>
+            </div>
+
+            <div v-if="fruitStats.length" class="stats-block">
+              <h3>水果种类统计</h3>
+              <div v-for="item in fruitStats" :key="item.fruit" class="stat-item">
+                <div class="stat-top">
+                  <span>{{ item.fruit }}</span>
+                  <span>{{ item.count }}</span>
+                </div>
+                <div class="stat-bar">
+                  <div class="stat-fill" :style="{ width: statWidth(item.count) }"></div>
+                </div>
+              </div>
+            </div>
+
+            <div v-if="ripenessStats.length" class="stats-block">
+              <h3>成熟度统计</h3>
+              <div v-for="item in ripenessStats" :key="`${item.fruit}-${item.ripeness}`" class="stat-item">
+                <div class="stat-top">
+                  <span>{{ item.fruit }} - {{ item.ripeness }}</span>
+                  <span>{{ item.count }}</span>
+                </div>
+                <div class="stat-bar">
+                  <div class="stat-fill alt" :style="{ width: statWidth(item.count) }"></div>
+                </div>
+              </div>
+            </div>
           </section>
         </div>
       </section>
@@ -198,460 +236,412 @@
 </template>
 
 <script>
+import { computed, defineComponent, onBeforeUnmount, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
-import { saveRealtimeReport } from '@/api/detection'
+import { detectRealtimeCurrentFrame, saveRealtimeReport } from '@/api/detection'
+import { useCameraPreviewSocket } from '@/composables/useCameraPreviewSocket'
+import { useCameraWorkspace } from '@/composables/useCameraWorkspace'
 
-export default {
+function createEmptySummary() {
+  return {
+    total_targets: 0,
+    sample_count: 0,
+    fruit_counts: {},
+    ripeness_counts: {},
+    valid_measurements: 0,
+    diameter_values: []
+  }
+}
+
+export default defineComponent({
   name: 'RealtimeDetectionView',
-  data() {
-    return {
-      autoSaved: false,
-      isStreaming: false,
-      cameraLoading: false,
-      cameraScanLoading: false,
-      videoStream: null,
-      videoElement: null,
-      canvasElement: null,
-      canvasContext: null,
-      availableCameras: [],
-      selectedCameraId: '',
-      websocket: null,
-      isConnected: false,
-      processingLoading: false,
-      reconnectCount: 0,
-      maxReconnect: 3,
-      isProcessing: false,
-      sendInterval: null,
-      targetFPS: 5,
-      imageQuality: 0.7,
-      currentResults: [],
-      fps: 0,
-      statistics: {
-        total_targets: 0,
-        fruit_counts: {},
-        ripeness_counts: {}
-      },
-      lastSendTime: 0,
-      fpsCounter: 0,
-      fpsUpdateTimer: null,
-      errorMessage: '',
-      saving: false
-    }
-  },
-  computed: {
-    sortedFruitStats() {
-      const entries = Object.entries(this.statistics.fruit_counts)
-      return entries.map(([fruit, count]) => ({ fruit, count })).sort((a, b) => b.count - a.count)
-    },
-    sortedRipenessData() {
+  setup() {
+    const router = useRouter()
+    const { state, loadRegistry, scanRegistry } = useCameraWorkspace()
+
+    const mode = ref('single')
+    const intervalMs = ref(1500)
+    const detectClassification = ref(true)
+    const detectRipeness = ref(false)
+    const previewEnabled = ref(false)
+    const isRunning = ref(false)
+    const runningRequest = ref(false)
+    const saving = ref(false)
+    const scanning = ref(false)
+    const errorMessage = ref('')
+    const currentTargets = ref([])
+    const lastDetectAt = ref(null)
+    const sessionSummary = ref(createEmptySummary())
+    let loopTimer = null
+
+    const registry = computed(() => state.registry)
+    const modeText = computed(() => (mode.value === 'single' ? '单摄种类/成熟度' : '双摄果径检测'))
+    const singleCameraLabel = computed(() => {
+      const cameraIndex = registry.value.selection?.single_camera_index ?? 0
+      const matched = (registry.value.last_scan?.results || []).find((item) => item.camera_index === cameraIndex)
+      return matched?.device_name ? `${matched.device_name}（索引 ${cameraIndex}）` : `相机 ${cameraIndex}`
+    })
+    const dualPairLabel = computed(() => {
+      const leftIndex = registry.value.selection?.dual_left_camera_index ?? 0
+      const rightIndex = registry.value.selection?.dual_right_camera_index ?? 1
+      const results = registry.value.last_scan?.results || []
+      const left = results.find((item) => item.camera_index === leftIndex)
+      const right = results.find((item) => item.camera_index === rightIndex)
+      const leftLabel = left?.device_name ? `${left.device_name}（索引 ${leftIndex}）` : `相机 ${leftIndex}`
+      const rightLabel = right?.device_name ? `${right.device_name}（索引 ${rightIndex}）` : `相机 ${rightIndex}`
+      return `${leftLabel} / ${rightLabel}`
+    })
+    const previewCameraText = computed(() => {
+      const preview = registry.value.selection?.preview_camera_indices || []
+      if (!preview.length) return '未配置'
+      return preview.map((item) => `相机 ${item}`).join('、')
+    })
+    const lastDetectTime = computed(() => (lastDetectAt.value ? new Date(lastDetectAt.value).toLocaleString('zh-CN') : '暂无'))
+    const fruitStats = computed(() =>
+      Object.entries(sessionSummary.value.fruit_counts || {})
+        .map(([fruit, count]) => ({ fruit, count }))
+        .sort((a, b) => b.count - a.count)
+    )
+    const ripenessStats = computed(() => {
       const result = []
-      Object.entries(this.statistics.ripeness_counts).forEach(([fruit, ripes]) => {
-        Object.entries(ripes).forEach(([ripeness, count]) => {
+      Object.entries(sessionSummary.value.ripeness_counts || {}).forEach(([fruit, ripenessMap]) => {
+        Object.entries(ripenessMap || {}).forEach(([ripeness, count]) => {
           result.push({ fruit, ripeness, count })
         })
       })
-      return result.sort((a, b) => {
-        if (a.fruit !== b.fruit) return a.fruit.localeCompare(b.fruit)
-        return b.count - a.count
-      })
-    },
-    hasHistory() {
-      return this.statistics.total_targets > 0
+      return result
+    })
+
+    const previewPayload = computed(() => {
+      if (mode.value === 'dual') {
+        return {
+          mode: 'dual',
+          left_camera_index: registry.value.selection?.dual_left_camera_index ?? 0,
+          right_camera_index: registry.value.selection?.dual_right_camera_index ?? 1,
+          detect: false,
+          fps: 6
+        }
+      }
+      return {
+        mode: 'single',
+        camera_index: registry.value.selection?.single_camera_index ?? 0,
+        detect: false,
+        fps: 6
+      }
+    })
+
+    const previewActive = computed(() => {
+      if (!previewEnabled.value) {
+        return false
+      }
+      if (mode.value === 'dual') {
+        return (registry.value.selection?.dual_left_camera_index ?? 0) !== (registry.value.selection?.dual_right_camera_index ?? 1)
+      }
+      return true
+    })
+
+    const canStartPreview = computed(() => {
+      if (mode.value === 'dual') {
+        return (registry.value.selection?.dual_left_camera_index ?? 0) !== (registry.value.selection?.dual_right_camera_index ?? 1)
+      }
+      return true
+    })
+
+    const {
+      connected: previewConnected,
+      errorMessage: previewErrorMessage,
+      imageUrl: previewImageUrl
+    } = useCameraPreviewSocket({
+      active: previewActive,
+      payload: previewPayload
+    })
+
+    const applySuggestedInterval = () => {
+      intervalMs.value =
+        mode.value === 'single'
+          ? registry.value.suggested_intervals.single_interval_ms
+          : registry.value.suggested_intervals.dual_interval_ms
     }
-  },
-  mounted() {
-    this.initCanvas()
-    this.startFPSMonitor()
-    this.loadCameraDevices()
-  },
-  beforeUnmount() {
-    this.cleanup()
-  },
-  methods: {
-    initCanvas() {
-      this.videoElement = this.$refs.videoElement
-      this.canvasElement = this.$refs.canvasElement
-      if (this.canvasElement) {
-        this.canvasContext = this.canvasElement.getContext('2d')
+
+    const handleModeChange = () => {
+      applySuggestedInterval()
+      if (previewEnabled.value && !canStartPreview.value) {
+        previewEnabled.value = false
       }
-    },
-    startFPSMonitor() {
-      this.fpsUpdateTimer = setInterval(() => {
-        this.fps = this.fpsCounter
-        this.fpsCounter = 0
-      }, 1000)
-    },
-    async loadCameraDevices(requestPermission = false) {
-      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+    }
+
+    const startPreview = () => {
+      if (!canStartPreview.value) {
+        errorMessage.value = '当前模式下摄像头配置无效，请先检查左右相机选择'
         return
       }
+      previewEnabled.value = true
+      errorMessage.value = ''
+      ElMessage.success('摄像头预览已启动')
+    }
 
-      this.cameraScanLoading = true
+    const stopPreview = () => {
+      if (isRunning.value) {
+        stopLoop(false)
+      }
+      previewEnabled.value = false
+      ElMessage.info('摄像头预览已停止')
+    }
+
+    const loadWorkspace = async () => {
       try {
-        let tempStream = null
-        if (requestPermission) {
-          try {
-            tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false })
-          } catch (error) {
-            console.warn('camera permission warmup failed', error)
-          }
-        }
-
-        const devices = await navigator.mediaDevices.enumerateDevices()
-        const cameras = devices
-          .filter((device) => device.kind === 'videoinput')
-          .map((device, index) => ({
-            deviceId: device.deviceId,
-            label: device.label || `摄像头 ${index + 1}`
-          }))
-
-        this.availableCameras = cameras
-
-        if (this.selectedCameraId && !cameras.some((camera) => camera.deviceId === this.selectedCameraId)) {
-          this.selectedCameraId = ''
-        }
-        if (!this.selectedCameraId && cameras.length === 1) {
-          this.selectedCameraId = cameras[0].deviceId
-        }
-
-        if (tempStream) {
-          tempStream.getTracks().forEach((track) => track.stop())
-        }
+        await loadRegistry()
+        applySuggestedInterval()
       } catch (error) {
-        console.error('enumerate camera devices failed', error)
-      } finally {
-        this.cameraScanLoading = false
+        errorMessage.value = error?.response?.data?.error || error.message || '读取摄像头配置失败'
       }
-    },
-    onCameraSelectionChange() {
-      if (this.isStreaming) {
-        ElMessage.info('已切换选择，重新启动摄像头后生效')
-      }
-    },
-    async startCamera() {
-      this.cameraLoading = true
-      this.errorMessage = ''
-      this.reconnectCount = 0
+    }
+
+    const refreshDevices = async () => {
+      scanning.value = true
+      errorMessage.value = ''
       try {
-        if (!this.availableCameras.length) {
-          await this.loadCameraDevices(true)
-        }
+        await scanRegistry({ max_index: 8 })
+        applySuggestedInterval()
+        ElMessage.success('设备列表已刷新并同步到全局')
+      } catch (error) {
+        errorMessage.value = error?.response?.data?.error || error.message || '刷新设备失败'
+      } finally {
+        scanning.value = false
+      }
+    }
 
-        const videoConstraints = {
-          width: { ideal: 640 },
-          height: { ideal: 480 }
-        }
-        if (this.selectedCameraId) {
-          videoConstraints.deviceId = { exact: this.selectedCameraId }
-        } else {
-          videoConstraints.facingMode = 'environment'
-        }
+    const updateSessionSummary = (payload) => {
+      const summary = payload.summary || {}
+      sessionSummary.value.total_targets += summary.total_targets || 0
+      sessionSummary.value.sample_count += 1
 
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: videoConstraints,
-          audio: false
+      Object.entries(summary.fruit_counts || {}).forEach(([fruit, count]) => {
+        sessionSummary.value.fruit_counts[fruit] = (sessionSummary.value.fruit_counts[fruit] || 0) + count
+      })
+
+      Object.entries(summary.ripeness_counts || {}).forEach(([fruit, ripenessMap]) => {
+        if (!sessionSummary.value.ripeness_counts[fruit]) {
+          sessionSummary.value.ripeness_counts[fruit] = {}
+        }
+        Object.entries(ripenessMap || {}).forEach(([ripeness, count]) => {
+          sessionSummary.value.ripeness_counts[fruit][ripeness] =
+            (sessionSummary.value.ripeness_counts[fruit][ripeness] || 0) + count
         })
-        this.videoStream = stream
-        this.videoElement.srcObject = stream
-        await this.videoElement.play()
-        this.isStreaming = true
-        await this.loadCameraDevices()
-        this.startDrawing()
-        await this.connectWebSocket()
-      } catch (err) {
-        console.error('开启摄像头失败:', err)
-        this.errorMessage = `无法访问摄像头: ${err.message}`
-      } finally {
-        this.cameraLoading = false
-      }
-    },
-    startDrawing() {
-      const drawFrame = () => {
-        if (!this.isStreaming) return
-        if (this.canvasContext && this.videoElement) {
-          if (this.canvasElement.width !== this.videoElement.videoWidth) {
-            this.canvasElement.width = this.videoElement.videoWidth
-            this.canvasElement.height = this.videoElement.videoHeight
-          }
-          this.canvasContext.drawImage(this.videoElement, 0, 0, this.canvasElement.width, this.canvasElement.height)
-          if (this.currentResults.length > 0) {
-            this.drawDetections(this.currentResults)
-          }
-        }
-        requestAnimationFrame(drawFrame)
-      }
-      drawFrame()
-    },
-    drawDetections(predictions) {
-      const ctx = this.canvasContext
-      if (!ctx) return
-
-      const scaleX = this.canvasElement.width / this.videoElement.videoWidth
-      const scaleY = this.canvasElement.height / this.videoElement.videoHeight
-
-      predictions.forEach((pred) => {
-        const [x1, y1, x2, y2] = pred.bbox.map((v, i) => (i % 2 === 0 ? v * scaleX : v * scaleY))
-        const width = x2 - x1
-        const height = y2 - y1
-
-        ctx.strokeStyle = '#ef4444'
-        ctx.lineWidth = 2
-        ctx.strokeRect(x1, y1, width, height)
-
-        let label = `${pred.fruit_class} ${(pred.fruit_confidence * 100).toFixed(1)}%`
-        if (pred.ripeness) {
-          label += ` | ${pred.ripeness.class}`
-        }
-
-        ctx.font = 'bold 14px "Microsoft YaHei", Arial'
-        const textWidth = ctx.measureText(label).width
-        const textHeight = 20
-
-        ctx.fillStyle = 'rgba(0,0,0,0.7)'
-        ctx.fillRect(x1, y1 - textHeight - 4, textWidth + 8, textHeight + 4)
-
-        ctx.fillStyle = '#fff'
-        ctx.fillText(label, x1 + 4, y1 - 6)
       })
-    },
-    async connectWebSocket() {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const wsUrl = `${protocol}//${window.location.hostname}:8000/ws/fruit-recognition/`
-      this.websocket = new WebSocket(wsUrl)
 
-      this.websocket.onopen = () => {
-        this.isConnected = true
-        this.reconnectCount = 0
-      }
-
-      this.websocket.onmessage = (event) => {
-        const data = JSON.parse(event.data)
-        if (data.status === 'success') {
-          this.currentResults = data.predictions
-          this.fpsCounter++
-          if (this.isProcessing) {
-            this.updateStatistics(data.predictions)
+      if (mode.value === 'dual') {
+        sessionSummary.value.valid_measurements += summary.valid_measurements || 0
+        ;(payload.targets || []).forEach((target) => {
+          const distance = target.diameter?.distance_mm
+          if (distance !== null && distance !== undefined) {
+            sessionSummary.value.diameter_values.push(Number(distance))
           }
-        } else if (data.status === 'error') {
-          console.error('识别错误:', data.error)
-          this.errorMessage = data.error
-        }
+        })
       }
+    }
 
-      this.websocket.onclose = () => {
-        this.isConnected = false
-        if (this.isProcessing) {
-          this.stopProcessing()
-          ElMessage.warning('WebSocket 断开，识别已停止')
-        }
-
-        if (this.isStreaming && this.reconnectCount < this.maxReconnect) {
-          this.reconnectCount++
-          setTimeout(() => this.connectWebSocket(), 2000)
-        } else if (this.reconnectCount >= this.maxReconnect) {
-          ElMessage.error('WebSocket 连接失败，请检查后端服务')
-        }
-      }
-
-      this.websocket.onerror = (err) => {
-        console.error('WebSocket 错误:', err)
-        this.errorMessage = 'WebSocket 连接失败'
-      }
-    },
-    updateStatistics(predictions) {
-      this.statistics.total_targets += predictions.length
-
-      predictions.forEach((pred) => {
-        const fruit = pred.fruit_class
-        this.statistics.fruit_counts[fruit] = (this.statistics.fruit_counts[fruit] || 0) + 1
-
-        if (pred.ripeness) {
-          if (!this.statistics.ripeness_counts[fruit]) {
-            this.statistics.ripeness_counts[fruit] = {}
-          }
-          const ripeClass = pred.ripeness.class
-          this.statistics.ripeness_counts[fruit][ripeClass] =
-            (this.statistics.ripeness_counts[fruit][ripeClass] || 0) + 1
-        }
-      })
-    },
-    startProcessing() {
-      if (!this.isConnected) {
-        ElMessage.error('WebSocket 未连接，请检查服务端')
-        return
-      }
-      if (this.statistics.total_targets === 0) {
-        this.statistics = {
-          total_targets: 0,
-          fruit_counts: {},
-          ripeness_counts: {}
-        }
-        this.autoSaved = false
-      }
-      this.isProcessing = true
-      ElMessage.success('开始实时识别')
-
-      const interval = 1000 / this.targetFPS
-      this.sendInterval = setInterval(() => {
-        if (this.isProcessing && this.isConnected && this.canvasElement) {
-          this.sendFrame()
-        }
-      }, interval)
-    },
-    stopProcessing() {
-      if (this.sendInterval) {
-        clearInterval(this.sendInterval)
-        this.sendInterval = null
-      }
-      this.isProcessing = false
-      ElMessage.info('识别已暂停')
-    },
-    toggleProcessing() {
-      if (this.isProcessing) {
-        this.stopProcessing()
-      } else {
-        this.startProcessing()
-      }
-    },
-    sendFrame() {
-      if (!this.canvasElement || !this.websocket || this.websocket.readyState !== WebSocket.OPEN) return
-      const dataURL = this.canvasElement.toDataURL('image/jpeg', this.imageQuality)
-      this.websocket.send(dataURL)
-    },
-    resetStatistics() {
-      if (this.statistics.total_targets === 0) return
-      if (!this.autoSaved && this.statistics.total_targets > 0) {
-        this.autoSaveReport()
-      }
-      this.statistics = {
-        total_targets: 0,
-        fruit_counts: {},
-        ripeness_counts: {}
-      }
-      this.currentResults = []
-      this.autoSaved = false
-      ElMessage.info('统计已重置，之前的数据已保存')
-    },
-    async autoSaveReport(snapshot = null) {
-      if (this.saving) return
-      if (!snapshot && this.statistics.total_targets === 0) return
-
-      this.saving = true
+    const runDetectionOnce = async () => {
+      runningRequest.value = true
+      errorMessage.value = ''
       try {
-        const payload = snapshot || {
-          total_targets: this.statistics.total_targets,
-          fruit_counts: { ...this.statistics.fruit_counts },
-          ripeness_counts: JSON.parse(JSON.stringify(this.statistics.ripeness_counts))
-        }
-        await saveRealtimeReport(payload)
-        this.autoSaved = true
-        ElMessage.success('检测报告已自动保存至历史记录')
+        const payload = await detectRealtimeCurrentFrame({
+          mode: mode.value,
+          camera_index: mode.value === 'single' ? registry.value.selection?.single_camera_index : undefined,
+          left_camera_index: mode.value === 'dual' ? registry.value.selection?.dual_left_camera_index : undefined,
+          right_camera_index: mode.value === 'dual' ? registry.value.selection?.dual_right_camera_index : undefined,
+          conf: 0.25,
+          detect_classification: detectClassification.value,
+          detect_ripeness: detectRipeness.value
+        })
+        currentTargets.value = payload.targets || []
+        lastDetectAt.value = Date.now()
+        updateSessionSummary(payload)
+        return true
       } catch (error) {
-        console.error('自动保存失败:', error)
+        errorMessage.value = error?.response?.data?.error || error.message || '实时检测失败'
+        return false
       } finally {
-        this.saving = false
+        runningRequest.value = false
       }
-    },
-    async saveCurrentReport() {
-      if (this.statistics.total_targets === 0) {
-        ElMessage.warning('暂无数据可保存')
+    }
+
+    const scheduleNext = () => {
+      if (!isRunning.value) return
+      loopTimer = window.setTimeout(async () => {
+        if (!isRunning.value) return
+        await runDetectionOnce()
+        scheduleNext()
+      }, intervalMs.value)
+    }
+
+    const startLoop = async () => {
+      if (isRunning.value) return
+      if (!canStartPreview.value) {
+        errorMessage.value = '当前模式的摄像头配置无效，请先到摄像头配置页修正'
         return
       }
-      if (this.autoSaved) {
-        ElMessage.info('当前会话数据已保存过，无需重复保存')
+      if (!previewEnabled.value) {
+        previewEnabled.value = true
+      }
+
+      sessionSummary.value = createEmptySummary()
+      currentTargets.value = []
+      isRunning.value = true
+
+      const ok = await runDetectionOnce()
+      if (!ok) {
+        isRunning.value = false
         return
       }
-      await this.autoSaveReport()
-    },
-    generateReport() {
-      if (this.statistics.total_targets === 0) {
-        ElMessage.warning('暂无识别数据，请先开始识别')
-        return
-      }
 
-      const reportData = {
-        total_targets: this.statistics.total_targets,
-        fruit_counts: this.statistics.fruit_counts,
-        ripeness_counts: this.statistics.ripeness_counts,
-        timestamp: new Date().toISOString(),
-        duration: '实时检测会话'
-      }
+      scheduleNext()
+      ElMessage.success('实时检测已启动')
+    }
 
-      const blob = new Blob([JSON.stringify(reportData, null, 2)], { type: 'application/json' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `realtime_report_${Date.now()}.json`
-      document.body.appendChild(a)
-      a.click()
-      document.body.removeChild(a)
-      URL.revokeObjectURL(url)
-
-      ElMessage.success('报告已生成并下载')
-    },
-    async stopCamera() {
-      this.stopProcessing()
-
-      if (this.statistics.total_targets > 0 && !this.autoSaved) {
-        await this.autoSaveReport()
+    const stopLoop = (showMessage = true) => {
+      const wasRunning = isRunning.value
+      isRunning.value = false
+      if (loopTimer) {
+        window.clearTimeout(loopTimer)
+        loopTimer = null
       }
+      if (showMessage && wasRunning) {
+        ElMessage.info('实时检测已停止')
+      }
+    }
 
-      if (this.videoStream) {
-        this.videoStream.getTracks().forEach((track) => track.stop())
-        this.videoStream = null
+    const diameterMetric = (type) => {
+      const values = sessionSummary.value.diameter_values || []
+      if (!values.length) return '-'
+      if (type === 'avg') {
+        return `${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)} mm`
       }
+      if (type === 'min') {
+        return `${Math.min(...values).toFixed(2)} mm`
+      }
+      return `${Math.max(...values).toFixed(2)} mm`
+    }
 
-      if (this.websocket) {
-        this.websocket.close()
+    const saveSessionReport = async () => {
+      saving.value = true
+      try {
+        await saveRealtimeReport({
+          mode: mode.value,
+          interval_ms: intervalMs.value,
+          sample_count: sessionSummary.value.sample_count,
+          total_targets: sessionSummary.value.total_targets,
+          fruit_counts: sessionSummary.value.fruit_counts,
+          ripeness_counts: sessionSummary.value.ripeness_counts,
+          valid_measurements: sessionSummary.value.valid_measurements,
+          statistics:
+            mode.value === 'dual'
+              ? {
+                  avg_diameter_mm: sessionSummary.value.diameter_values.length
+                    ? Number(
+                        (
+                          sessionSummary.value.diameter_values.reduce((sum, value) => sum + value, 0) /
+                          sessionSummary.value.diameter_values.length
+                        ).toFixed(6)
+                      )
+                    : null,
+                  min_diameter_mm: sessionSummary.value.diameter_values.length
+                    ? Number(Math.min(...sessionSummary.value.diameter_values).toFixed(6))
+                    : null,
+                  max_diameter_mm: sessionSummary.value.diameter_values.length
+                    ? Number(Math.max(...sessionSummary.value.diameter_values).toFixed(6))
+                    : null
+                }
+              : {},
+          camera_profile: {
+            single_camera_index: registry.value.selection?.single_camera_index,
+            dual_left_camera_index: registry.value.selection?.dual_left_camera_index,
+            dual_right_camera_index: registry.value.selection?.dual_right_camera_index
+          }
+        })
+        ElMessage.success('本次实时检测会话已保存到历史记录')
+      } catch (error) {
+        errorMessage.value = error?.response?.data?.error || error.message || '保存会话失败'
+      } finally {
+        saving.value = false
       }
+    }
 
-      this.isStreaming = false
-      this.isConnected = false
-      this.currentResults = []
-      this.statistics = { total_targets: 0, fruit_counts: {}, ripeness_counts: {} }
-      this.errorMessage = ''
-      this.reconnectCount = 0
+    const goToCameraConfig = () => {
+      router.push('/camera/config')
+    }
 
-      if (this.canvasContext) {
-        this.canvasContext.clearRect(0, 0, this.canvasElement.width, this.canvasElement.height)
+    const targetTitle = (target) => {
+      if (mode.value === 'single') {
+        return target.fruit_class || target.label || 'fruit'
       }
+      return target.classification?.class || target.label || 'fruit'
+    }
 
-      ElMessage.info('摄像头已关闭')
-    },
-    cleanup() {
-      if (this.sendInterval) clearInterval(this.sendInterval)
-      if (this.fpsUpdateTimer) clearInterval(this.fpsUpdateTimer)
-      if (this.videoStream) {
-        this.videoStream.getTracks().forEach((track) => track.stop())
-      }
-      if (this.websocket) {
-        this.websocket.close()
-      }
-    },
-    getFruitIcon(fruit) {
-      const iconMap = {
-        香蕉: '🍌',
-        芒果: '🥭',
-        草莓: '🍓',
-        苹果: '🍎',
-        橙子: '🍊',
-        葡萄: '🍇',
-        西瓜: '🍉',
-        菠萝: '🍍',
-        猕猴桃: '🥝',
-        柠檬: '🍋'
-      }
-      return iconMap[fruit] || '🍎'
-    },
-    getPercentage(count, total) {
-      if (!total) return 0
-      return ((count / total) * 100).toFixed(1)
-    },
-    getFruitTotal(fruit) {
-      return this.statistics.fruit_counts[fruit] || 0
+    const targetConfidence = (target) => {
+      const confidence = mode.value === 'single' ? target.fruit_confidence : target.classification?.confidence
+      if (confidence === null || confidence === undefined) return '-'
+      return `${(Number(confidence) * 100).toFixed(1)}%`
+    }
+
+    const formatPercent = (value) => `${(Number(value) * 100).toFixed(1)}%`
+    const formatBbox = (bbox) => (Array.isArray(bbox) && bbox.length === 4 ? `[${bbox.join(', ')}]` : '-')
+    const statWidth = (count) => {
+      if (!sessionSummary.value.total_targets) return '0%'
+      return `${Math.min(100, ((count / sessionSummary.value.total_targets) * 100).toFixed(1))}%`
+    }
+
+    onMounted(() => {
+      loadWorkspace()
+    })
+
+    onBeforeUnmount(() => {
+      stopLoop(false)
+    })
+
+    return {
+      applySuggestedInterval,
+      canStartPreview,
+      currentTargets,
+      detectClassification,
+      detectRipeness,
+      diameterMetric,
+      dualPairLabel,
+      errorMessage,
+      formatBbox,
+      formatPercent,
+      fruitStats,
+      goToCameraConfig,
+      handleModeChange,
+      intervalMs,
+      isRunning,
+      lastDetectTime,
+      mode,
+      modeText,
+      previewEnabled,
+      previewCameraText,
+      previewConnected,
+      previewErrorMessage,
+      previewImageUrl,
+      refreshDevices,
+      ripenessStats,
+      runningRequest,
+      saveSessionReport,
+      saving,
+      scanning,
+      sessionSummary,
+      singleCameraLabel,
+      startLoop,
+      startPreview,
+      statWidth,
+      stopLoop,
+      stopPreview,
+      targetConfidence,
+      targetTitle
     }
   }
-}
+})
 </script>
 
 <style scoped>
@@ -664,7 +654,7 @@ export default {
 }
 
 .page-shell {
-  max-width: 1440px;
+  max-width: 1460px;
   margin: 0 auto;
   display: grid;
   gap: 20px;
@@ -673,14 +663,13 @@ export default {
 .hero,
 .panel-card {
   border-radius: 24px;
-  border: none;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 20px 42px rgba(27, 51, 40, 0.08);
 }
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
+  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.7fr);
   gap: 24px;
   padding: 28px 30px;
   background: linear-gradient(135deg, #173b32 0%, #235042 58%, #3a7a65 100%);
@@ -698,7 +687,6 @@ export default {
 .hero h1 {
   margin: 0;
   font-size: 36px;
-  line-height: 1.1;
 }
 
 .hero-text {
@@ -707,10 +695,9 @@ export default {
   color: rgba(246, 251, 248, 0.86);
 }
 
-.hero-status {
+.hero-badges {
   display: grid;
   gap: 12px;
-  align-content: start;
 }
 
 .hero-badge {
@@ -720,7 +707,6 @@ export default {
   padding: 0 14px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
-  color: #eff8f4;
 }
 
 .guide-strip {
@@ -754,26 +740,14 @@ export default {
 .guide-step h3,
 .panel-header h2 {
   margin: 0 0 6px;
-  font-size: 18px;
-  color: #18352b;
+  color: #173b32;
 }
 
 .guide-step p,
 .panel-header p {
   margin: 0;
+  color: #587166;
   line-height: 1.7;
-  color: #557064;
-}
-
-.error-banner {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
-  color: #b42318;
 }
 
 .workspace-grid {
@@ -801,7 +775,6 @@ export default {
 .panel-header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
   gap: 12px;
   margin-bottom: 16px;
 }
@@ -817,90 +790,53 @@ export default {
   font-size: 13px;
 }
 
-.video-wrapper {
-  position: relative;
-  overflow: hidden;
-  border-radius: 22px;
-  background: linear-gradient(140deg, #0f172a 0%, #1a2c43 100%);
-  min-height: 420px;
+.form-grid {
+  display: grid;
+  gap: 16px;
 }
 
-.camera-picker {
-  margin-top: 16px;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: #f6faf7;
-}
-
-.camera-picker__header,
-.camera-picker__row {
+.interval-row,
+.checkbox-row,
+.action-row {
   display: flex;
   gap: 12px;
-  justify-content: space-between;
-  align-items: center;
   flex-wrap: wrap;
+  align-items: center;
 }
 
-.camera-picker__row {
-  margin-top: 12px;
-}
-
-.camera-picker__hint {
+.selection-summary {
+  display: grid;
+  gap: 6px;
   color: #587166;
-  font-size: 13px;
 }
 
-.camera-select {
-  min-width: 260px;
-  max-width: 100%;
-  padding: 10px 12px;
-  border: 1px solid #d7e3dc;
-  border-radius: 12px;
-  background: #fff;
-  color: #173b32;
+.selection-summary p {
+  margin: 0;
 }
 
-.video-preview,
-.overlay-canvas {
+.frame-stage {
+  border-radius: 22px;
+  overflow: hidden;
+  background: linear-gradient(140deg, #0f172a 0%, #1a2c43 100%);
+  min-height: 420px;
+  display: grid;
+  place-items: center;
+}
+
+.frame-image {
   width: 100%;
-  height: auto;
   display: block;
 }
 
-.overlay-canvas {
-  position: absolute;
-  inset: 0;
+.frame-placeholder {
+  color: #d5dbe5;
+  text-align: center;
+  padding: 28px 18px;
 }
 
-.action-row,
-.status-row {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 16px;
-}
-
-.status-chip {
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: #edf3ef;
-  color: #587166;
-  font-size: 13px;
-}
-
-.status-chip.active {
-  background: #eef9f3;
-  color: #18533a;
-}
-
-.status-chip.warning {
-  background: #fff8eb;
-  color: #7c5a13;
-}
-
-.status-chip.neutral {
-  background: #eef2f0;
-  color: #35594d;
+.preview-error {
+  margin: 12px 0 0;
+  color: #b42318;
 }
 
 .result-grid {
@@ -919,14 +855,35 @@ export default {
   justify-content: space-between;
   gap: 12px;
   color: #173b32;
-  font-weight: 700;
 }
 
-.ripeness-line,
-.bbox-line {
-  margin-top: 8px;
+.result-item p {
+  margin: 8px 0 0;
   color: #587166;
   font-size: 13px;
+}
+
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric-box {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #f6faf7;
+}
+
+.metric-box span {
+  display: block;
+  color: #587166;
+  margin-bottom: 8px;
+}
+
+.metric-box strong {
+  color: #173b32;
+  font-size: 18px;
 }
 
 .stats-block + .stats-block {
@@ -947,7 +904,6 @@ export default {
 .stat-top {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
   color: #587166;
   font-size: 13px;
 }
@@ -969,58 +925,6 @@ export default {
   background: linear-gradient(90deg, #b8801c 0%, #f59e0b 100%);
 }
 
-.tips-list {
-  margin: 0;
-  padding-left: 18px;
-  color: #557064;
-  line-height: 1.9;
-}
-
-.btn {
-  min-width: 108px;
-  padding: 12px 18px;
-  border: none;
-  border-radius: 14px;
-  cursor: pointer;
-  font-size: 14px;
-  font-weight: 600;
-  transition: transform 0.2s ease, opacity 0.2s ease;
-}
-
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.btn:not(:disabled):hover {
-  transform: translateY(-1px);
-}
-
-.btn-primary {
-  background: #173b32;
-  color: #fff;
-}
-
-.btn-success {
-  background: #2f6c59;
-  color: #fff;
-}
-
-.btn-secondary {
-  background: #edf3ef;
-  color: #244538;
-}
-
-.btn-warning {
-  background: #f59e0b;
-  color: #fff;
-}
-
-.btn-danger {
-  background: #d92d20;
-  color: #fff;
-}
-
 @media (max-width: 1320px) {
   .workspace-grid {
     grid-template-columns: 1fr;
@@ -1032,10 +936,7 @@ export default {
 }
 
 @media (max-width: 980px) {
-  .hero {
-    grid-template-columns: 1fr;
-  }
-
+  .hero,
   .guide-strip {
     grid-template-columns: 1fr;
   }
@@ -1046,26 +947,8 @@ export default {
     padding: 12px;
   }
 
-  .hero {
-    padding: 22px 20px;
-  }
-
-  .hero h1 {
-    font-size: 30px;
-  }
-
-  .panel-header,
-  .action-row,
-  .camera-picker__header,
-  .camera-picker__row,
-  .status-row,
-  .result-head,
-  .stat-top {
-    flex-direction: column;
-  }
-
-  .video-wrapper {
-    min-height: 280px;
+  .stats-grid {
+    grid-template-columns: 1fr;
   }
 }
 </style>

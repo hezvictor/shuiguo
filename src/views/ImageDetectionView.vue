@@ -6,39 +6,15 @@
           <p class="eyebrow">Image Detection Workspace</p>
           <h1>图片检测</h1>
           <p class="hero-text">
-            上传一张水果图片，点击“开始检测”，系统会先圈出所有识别目标；再勾选你关心的水果，生成更详细的分类与成熟度报告。
+            页面包含两个输入框。单图片输入用于水果种类识别，或水果种类识别加熟度识别；果径图片输入用于左右图成组的果径测量。
+            两个输入框都支持直接上传图片，也支持上传压缩包后批量检测。
           </p>
         </div>
-
         <div class="hero-status">
-          <div class="hero-badge">{{ selectedFile ? `当前文件：${selectedFile.name}` : '等待上传图片' }}</div>
-          <div class="hero-badge">{{ targetsList.length ? `已检测 ${targetsList.length} 个目标` : '尚未检测' }}</div>
-          <div class="hero-badge">{{ reportData ? '报告已生成' : '报告未生成' }}</div>
+          <div class="hero-badge">单图片输入：{{ singleInputs.length }} 项</div>
+          <div class="hero-badge">果径图片输入：{{ diameterInputs.length }} 项</div>
+          <div class="hero-badge">最近结果：{{ visibleRecords.length }} 条</div>
         </div>
-      </section>
-
-      <section class="guide-strip">
-        <article class="guide-step">
-          <span class="guide-index">1</span>
-          <div>
-            <h3>上传图片</h3>
-            <p>支持 JPG、PNG 等常见格式，拖拽或点击上传都可以。</p>
-          </div>
-        </article>
-        <article class="guide-step">
-          <span class="guide-index">2</span>
-          <div>
-            <h3>开始检测</h3>
-            <p>系统会先识别图片中的水果，并在画面里标出检测框。</p>
-          </div>
-        </article>
-        <article class="guide-step">
-          <span class="guide-index">3</span>
-          <div>
-            <h3>勾选并生成报告</h3>
-            <p>选择要分析的目标后生成报告，查看分类、成熟度和详情。</p>
-          </div>
-        </article>
       </section>
 
       <div v-if="errorMessage" class="error-banner">
@@ -48,82 +24,110 @@
 
       <section class="workspace-grid">
         <div class="workspace-main">
-          <section class="panel-card upload-card">
+          <section class="panel-card">
             <div class="panel-header">
               <div>
-                <h2>上传与检测</h2>
-                <p>先上传图片，再执行检测。支持拖拽上传。</p>
+                <h2>检测选项</h2>
+                <p>单图片输入默认执行水果种类识别；如需同时识别熟度，请勾选下面的选项。果径检测是否执行由是否上传果径输入决定。</p>
               </div>
             </div>
 
-            <div
-              class="upload-area"
-              :class="{ 'drag-over': dragOver }"
-              @drop="onDrop"
-              @dragover="onDragOver"
-              @dragleave="onDragLeave"
-              @click="triggerFileInput"
-            >
-              <div class="upload-content">
-                <span class="upload-icon">◫</span>
-                <p class="upload-text">点击选择图片或将图片拖到这里</p>
-                <p class="upload-hint">支持 JPG / PNG，建议不超过 5MB</p>
-              </div>
-              <input
-                ref="fileInput"
-                type="file"
-                accept="image/*"
-                @change="onFileSelected"
-                style="display: none"
-              />
-            </div>
-
-            <div class="action-row">
-              <button @click="triggerFileInput" class="btn btn-primary" :disabled="isProcessing">
-                <span v-if="isProcessing">处理中...</span>
-                <span v-else>选择图片</span>
-              </button>
-              <button @click="detectImage" class="btn btn-success" :disabled="!selectedFile || isProcessing">
-                {{ isProcessing ? '检测中...' : '开始检测' }}
-              </button>
-              <button @click="clearAll" class="btn btn-secondary" :disabled="isProcessing">
-                清空
-              </button>
-            </div>
-
-            <div v-if="selectedFile" class="file-meta-card">
-              <span>文件名：{{ selectedFile.name }}</span>
-              <span>处理时间：{{ processingTime || 0 }} ms</span>
-              <span>目标数量：{{ targetsList.length }}</span>
+            <div class="option-grid option-grid--single">
+              <label class="option-item">
+                <input type="checkbox" v-model="options.detectRipeness" />
+                <span>单图片同时进行熟度检测</span>
+              </label>
             </div>
           </section>
 
-          <section class="panel-card canvas-card">
+          <section class="panel-card">
             <div class="panel-header">
               <div>
-                <h2>检测画面</h2>
-                <p>蓝色高亮表示你当前选中的目标。</p>
+                <h2>单图片输入</h2>
+                <p>支持上传单张或多张图片，也支持上传文件夹压缩包。压缩包中的所有可识别图片都会参与检测。</p>
               </div>
-              <span v-if="selectedTargets.length" class="panel-badge">已选 {{ selectedTargets.length }} 个目标</span>
             </div>
 
-            <div v-if="selectedFile" class="canvas-stage">
-              <div class="image-wrapper canvas-wrapper">
-                <canvas
-                  ref="resultCanvas"
-                  class="result-canvas"
-                  :style="{ width: canvasWidth + 'px', height: canvasHeight + 'px' }"
-                ></canvas>
-                <div v-if="!targetsList.length && !isProcessing" class="empty-overlay">等待检测结果</div>
-                <div v-if="isProcessing" class="processing-overlay">
-                  <div class="spinner"></div>
-                  <span>检测中...</span>
+            <div class="upload-area" @click="$refs.singleInput.click()">
+              <div class="upload-content">
+                <span class="upload-icon">图</span>
+                <p class="upload-text">点击选择单图片或压缩包</p>
+                <p class="upload-hint">支持 JPG / PNG / WEBP / BMP / ZIP，可一次选择多个文件</p>
+              </div>
+              <input
+                ref="singleInput"
+                type="file"
+                multiple
+                accept="image/*,.zip"
+                style="display: none"
+                @change="onSingleInputsSelected"
+              />
+            </div>
+
+            <div v-if="singleInputs.length" class="preview-grid">
+              <article v-for="item in singleInputs" :key="item.uid" class="preview-card">
+                <button class="remove-btn" @click.stop="removeSingleInput(item.uid)">×</button>
+                <div v-if="item.previewUrl" class="preview-visual">
+                  <img :src="item.previewUrl" :alt="item.name" class="preview-image" />
                 </div>
+                <div v-else class="archive-placeholder">ZIP</div>
+                <div class="preview-meta">
+                  <strong>{{ item.name }}</strong>
+                  <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
+                </div>
+              </article>
+            </div>
+          </section>
+
+          <section class="panel-card">
+            <div class="panel-header">
+              <div>
+                <h2>果径图片输入</h2>
+                <p>
+                  直接上传时，文件名需包含 left 或 right，系统会自动配对；上传压缩包时，要求一级目录下只包含文件夹，每个二级目录内必须恰好有一张 left 图和一张 right 图。
+                </p>
               </div>
             </div>
-            <div v-else class="empty-card-state">
-              <h3>等待上传图片</h3>
-              <p>上传图片后，这里会展示检测框和高亮结果。</p>
+
+            <div class="upload-area" @click="$refs.diameterInput.click()">
+              <div class="upload-content">
+                <span class="upload-icon">径</span>
+                <p class="upload-text">点击选择果径图片或压缩包</p>
+                <p class="upload-hint">支持左右图图片或 ZIP；ZIP 内部目录结构必须符合果径分组规则</p>
+              </div>
+              <input
+                ref="diameterInput"
+                type="file"
+                multiple
+                accept="image/*,.zip"
+                style="display: none"
+                @change="onDiameterInputsSelected"
+              />
+            </div>
+
+            <div v-if="diameterInputs.length" class="preview-grid">
+              <article v-for="item in diameterInputs" :key="item.uid" class="preview-card">
+                <button class="remove-btn" @click.stop="removeDiameterInput(item.uid)">×</button>
+                <div v-if="item.previewUrl" class="preview-visual">
+                  <img :src="item.previewUrl" :alt="item.name" class="preview-image" />
+                </div>
+                <div v-else class="archive-placeholder">{{ item.isArchive ? 'ZIP' : '图' }}</div>
+                <div class="preview-meta">
+                  <strong>{{ item.name }}</strong>
+                  <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
+                </div>
+              </article>
+            </div>
+            <div v-else class="empty-inline-tip">当前未上传果径输入；如果没有果径数据，开始检测时将自动跳过果径测量。</div>
+          </section>
+
+          <section class="panel-card">
+            <div class="action-row">
+              <button class="btn btn-primary" :disabled="submitting" @click="submitTask">
+                {{ submitting ? '检测中...' : '开始检测并生成报告' }}
+              </button>
+              <button class="btn btn-secondary" :disabled="submitting" @click="resetPendingUploads">清空待上传</button>
+              <button class="btn btn-secondary" :disabled="loadingRecent" @click="fetchRecentResults">刷新最近结果</button>
             </div>
           </section>
         </div>
@@ -132,442 +136,357 @@
           <section class="panel-card">
             <div class="panel-header">
               <div>
-                <h2>目标列表</h2>
-                <p>点击整行或复选框都可以选择目标。</p>
+                <h2>最近图片检测结果</h2>
+                <p>这些记录来自后端检测历史；关闭当前页面后仍会保留。</p>
               </div>
-              <div v-if="targetsList.length" class="select-all">
-                <input type="checkbox" id="selectAll" v-model="selectAll" @change="onSelectAllChange" />
-                <label for="selectAll">全选 ({{ targetsList.length }})</label>
-              </div>
-            </div>
-
-            <div v-if="targetsList.length" class="targets-list">
-              <div
-                v-for="(target, idx) in targetsList"
-                :key="idx"
-                class="target-item"
-                :class="{ 'target-selected': selectedTargets.includes(idx) }"
-                @click="toggleTargetSelection(idx)"
-              >
-                <input
-                  type="checkbox"
-                  :value="idx"
-                  v-model="selectedTargets"
-                  @click.stop
-                  @change="onTargetSelectionChange"
-                  class="target-checkbox"
-                />
-                <div class="target-copy">
-                  <span class="target-label">
-                    {{ target.label }}
-                    <span class="confidence-badge">{{ (target.confidence * 100).toFixed(1) }}%</span>
-                  </span>
-                  <span class="target-bbox">框坐标 [{{ target.bbox.join(', ') }}]</span>
-                </div>
-              </div>
-            </div>
-            <div v-else class="empty-inline-tip">
-              先完成检测，右侧会列出识别到的水果目标。
-            </div>
-
-            <div class="report-actions">
-              <button
-                @click="generateReport"
-                class="btn btn-primary"
-                :disabled="isGeneratingReport || selectedTargets.length === 0"
-              >
-                {{ isGeneratingReport ? '生成中...' : `生成报告 (${selectedTargets.length} 个目标)` }}
+              <button v-if="dismissedIds.length" class="btn btn-secondary btn-mini" @click="restoreDismissed">
+                恢复隐藏 {{ dismissedIds.length }}
               </button>
             </div>
-          </section>
 
-          <section v-if="reportData" class="panel-card">
-            <div class="panel-header">
-              <div>
-                <h2>检测报告</h2>
-                <p>这里展示你已选择目标的详细识别结果。</p>
-              </div>
+            <div v-if="loadingRecent" class="empty-inline-tip">正在加载最近结果...</div>
+            <div v-else-if="visibleRecords.length" class="result-list">
+              <article v-for="record in visibleRecords" :key="record.id" class="result-card">
+                <button class="remove-btn" @click="dismissRecord(record.id)">×</button>
+                <img
+                  v-if="resolveRecordCover(record)"
+                  :src="resolveRecordCover(record)"
+                  :alt="record.title"
+                  class="result-cover"
+                />
+                <div class="result-copy">
+                  <strong>{{ compactTitle(record) }}</strong>
+                  <div class="result-tags">
+                    <span class="result-tag">{{ sourceLabel(record) }}</span>
+                    <span
+                      v-for="tag in operationTags(record)"
+                      :key="`${record.id}-${tag}`"
+                      class="result-tag result-tag--accent"
+                    >
+                      {{ tag }}
+                    </span>
+                  </div>
+                  <span>{{ formatDateTime(record.created_at) }}</span>
+                  <span>{{ compactSummary(record) }}</span>
+                </div>
+                <div class="result-actions">
+                  <button class="btn btn-secondary btn-mini" @click="viewDetail(record)">查看详情</button>
+                  <button
+                    v-if="record.report_file || record.report_url"
+                    class="btn btn-success btn-mini"
+                    @click="downloadReport(record)"
+                  >
+                    下载报告
+                  </button>
+                  <button class="btn btn-secondary btn-mini" @click="goToHistory">检测历史</button>
+                </div>
+              </article>
             </div>
-
-            <div class="table-shell">
-              <table class="report-table">
-                <thead>
-                  <tr>
-                    <th>序号</th>
-                    <th>框坐标</th>
-                    <th>水果分类</th>
-                    <th>分类置信度</th>
-                    <th>成熟度</th>
-                    <th>成熟度置信度</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr v-for="(item, idx) in reportData.targets" :key="idx">
-                    <td>{{ idx + 1 }}</td>
-                    <td>[{{ item.bbox.join(', ') }}]</td>
-                    <td>{{ item.fruit_classification.class }}</td>
-                    <td>{{ (item.fruit_classification.confidence * 100).toFixed(1) }}%</td>
-                    <td>{{ item.ripeness ? item.ripeness.predicted_class : '不适用' }}</td>
-                    <td>{{ item.ripeness ? (item.ripeness.confidence * 100).toFixed(1) + '%' : '-' }}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div class="report-actions">
-              <button @click="downloadReportAsHtml" class="btn btn-success">下载 HTML 报告</button>
-            </div>
-          </section>
-
-          <section class="panel-card">
-            <div class="panel-header">
-              <div>
-                <h2>使用说明</h2>
-                <p>第一次使用时按下面顺序操作即可。</p>
-              </div>
-            </div>
-
-            <ul class="tips-list">
-              <li>点击“选择图片”或把图片拖到上传区域。</li>
-              <li>点击“开始检测”后，系统会在画面中显示检测框。</li>
-              <li>在右侧目标列表中勾选你需要继续分析的水果。</li>
-              <li>生成报告后，可直接下载 HTML 报告进行保存或分享。</li>
-            </ul>
+            <div v-else class="empty-inline-tip">暂无图片检测结果，提交一次任务后会显示在这里。</div>
           </section>
         </div>
       </section>
+
+      <el-dialog v-model="detailVisible" title="图片检测详情" width="88%" :close-on-click-modal="false">
+        <div v-if="currentDetail" class="detail-shell">
+          <div class="detail-summary">
+            <p><strong>任务标题：</strong>{{ currentDetail.title || `图片检测 #${currentDetail.id}` }}</p>
+            <p><strong>检测时间：</strong>{{ formatDateTime(currentDetail.created_at) }}</p>
+            <p><strong>任务状态：</strong>{{ currentDetail.status_display || currentDetail.status }}</p>
+            <p><strong>目标总数：</strong>{{ currentDetail.summary?.total_targets ?? 0 }}</p>
+          </div>
+
+          <div
+            v-for="(item, index) in normalizedDetailItems"
+            :key="`${item.display_name}-${index}`"
+            class="detail-item"
+          >
+            <div class="panel-header">
+              <div>
+                <h2>{{ item.display_name }}</h2>
+                <p>
+                  {{ detailTypeLabel(item.item_type) }}
+                  <span v-if="item.archive_name"> · {{ item.archive_name }}</span>
+                  <span v-if="item.archive_path"> · {{ item.archive_path }}</span>
+                </p>
+              </div>
+            </div>
+
+            <div class="detail-image-grid">
+              <figure v-if="item.originalImageUrl" class="detail-figure">
+                <img :src="item.originalImageUrl" alt="original" class="detail-image" />
+                <figcaption>原图</figcaption>
+              </figure>
+              <figure v-if="item.rightImageUrl" class="detail-figure">
+                <img :src="item.rightImageUrl" alt="right original" class="detail-image" />
+                <figcaption>右图</figcaption>
+              </figure>
+              <figure v-if="item.annotatedImageUrl" class="detail-figure">
+                <img :src="item.annotatedImageUrl" alt="annotated" class="detail-image" />
+                <figcaption>检测结果</figcaption>
+              </figure>
+            </div>
+
+            <el-table :data="item.targets || []" border style="width: 100%">
+              <el-table-column prop="target_index" label="目标序号" width="90" />
+              <el-table-column label="边界框" min-width="150">
+                <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
+              </el-table-column>
+              <el-table-column label="种类" min-width="140">
+                <template #default="{ row }">{{ row.classification?.class || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="熟度" min-width="180">
+                <template #default="{ row }">{{ row.ripeness?.predicted_class || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="果径(mm)" width="110">
+                <template #default="{ row }">{{ formatDiameter(row.diameter?.distance_mm) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" min-width="120">
+                <template #default="{ row }">{{ row.diameter?.status || 'ok' }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
+      </el-dialog>
     </div>
   </div>
 </template>
 
 <script>
-import { detectImage, generateReport } from '@/api/detection'
+import { ElMessage } from 'element-plus'
+import {
+  createImageDetectionTask,
+  getDetectionHistoryDetail,
+  getDetectionHistoryList
+} from '@/api/detection'
+import { dismissHistoryId, loadDismissedIds, restoreHistoryId, saveDismissedIds } from '@/utils/imageDetectionWorkspace'
 
 export default {
-  name: 'ImageDetection',
+  name: 'ImageDetectionView',
   data() {
     return {
-      selectedFile: null,
-      originalImageUrl: null,
-      originalImage: null,
-      targetsList: [],
-      selectedTargets: [],
-      selectAll: false,
-      isProcessing: false,
-      isGeneratingReport: false,
-      processingTime: 0,
-      errorMessage: '',
-      dragOver: false,
-      canvasWidth: 0,
-      canvasHeight: 0,
-      reportData: null,
-      canvasContext: null
-    }
-  },
-  watch: {
-    selectedTargets: {
-      handler() {
-        this.redrawCanvasWithHighlights()
+      singleInputs: [],
+      diameterInputs: [],
+      options: {
+        detectRipeness: false
       },
-      deep: true
+      submitting: false,
+      loadingRecent: false,
+      errorMessage: '',
+      recentRecords: [],
+      dismissedIds: [],
+      detailVisible: false,
+      currentDetail: null
     }
   },
-  methods: {
-    triggerFileInput() {
-      this.$refs.fileInput.click()
+  computed: {
+    visibleRecords() {
+      return this.recentRecords.filter((item) => !this.dismissedIds.includes(item.id))
     },
-    onFileSelected(event) {
-      const file = event.target.files[0]
-      if (file) {
-        this.handleFile(file)
-      }
-    },
-    onDragOver(event) {
-      event.preventDefault()
-      this.dragOver = true
-    },
-    onDragLeave() {
-      this.dragOver = false
-    },
-    onDrop(event) {
-      event.preventDefault()
-      this.dragOver = false
-      const file = event.dataTransfer.files[0]
-      if (file) {
-        this.handleFile(file)
-      }
-    },
-    handleFile(file) {
-      if (!file.type.startsWith('image/')) {
-        this.errorMessage = '请选择图片文件（JPG、PNG 等格式）'
-        return
-      }
-      if (file.size > 5 * 1024 * 1024) {
-        this.errorMessage = '图片大小不能超过 5MB'
-        return
-      }
-
-      this.selectedFile = file
-      this.targetsList = []
-      this.selectedTargets = []
-      this.reportData = null
-      this.errorMessage = ''
-      this.selectAll = false
-      this.processingTime = 0
-
-      if (this.originalImageUrl) {
-        URL.revokeObjectURL(this.originalImageUrl)
-      }
-      this.originalImageUrl = URL.createObjectURL(file)
-
-      const img = new Image()
-      img.onload = () => {
-        this.originalImage = img
-        this.canvasWidth = img.width
-        this.canvasHeight = img.height
-        this.initCanvas()
-        if (this.targetsList.length > 0) {
-          this.redrawCanvasWithHighlights()
-        }
-      }
-      img.src = this.originalImageUrl
-    },
-    initCanvas() {
-      const canvas = this.$refs.resultCanvas
-      if (canvas && this.originalImage) {
-        canvas.width = this.originalImage.width
-        canvas.height = this.originalImage.height
-        this.canvasContext = canvas.getContext('2d')
-        this.canvasContext.drawImage(this.originalImage, 0, 0)
-      }
-    },
-    redrawCanvasWithHighlights() {
-      const canvas = this.$refs.resultCanvas
-      const ctx = this.canvasContext
-      if (!canvas || !ctx || !this.originalImage) {
-        return
-      }
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height)
-      ctx.drawImage(this.originalImage, 0, 0)
-
-      this.targetsList.forEach((target, idx) => {
-        const [x1, y1, x2, y2] = target.bbox
-        const isSelected = this.selectedTargets.includes(idx)
-
-        if (isSelected) {
-          ctx.strokeStyle = '#3b82f6'
-          ctx.lineWidth = 4
-          ctx.shadowBlur = 8
-          ctx.shadowColor = '#3b82f6'
-        } else {
-          ctx.strokeStyle = '#ef4444'
-          ctx.lineWidth = 2
-          ctx.shadowBlur = 0
-        }
-
-        ctx.strokeRect(x1, y1, x2 - x1, y2 - y1)
-
-        const label = `${target.label} ${(target.confidence * 100).toFixed(1)}%`
-        ctx.font = 'bold 14px "Segoe UI", "Microsoft YaHei", Arial'
-        const textWidth = ctx.measureText(label).width
-        const textHeight = 20
-        const padding = 4
-
-        ctx.fillStyle = isSelected ? 'rgba(59, 130, 246, 0.85)' : 'rgba(239, 68, 68, 0.85)'
-        ctx.fillRect(x1, y1 - textHeight - padding, textWidth + padding * 2, textHeight + padding)
-
-        ctx.fillStyle = '#ffffff'
-        ctx.fillText(label, x1 + padding, y1 - padding)
-      })
-
-      ctx.shadowBlur = 0
-    },
-    toggleTargetSelection(idx) {
-      const index = this.selectedTargets.indexOf(idx)
-      if (index === -1) {
-        this.selectedTargets.push(idx)
-      } else {
-        this.selectedTargets.splice(index, 1)
-      }
-      this.updateSelectAllState()
-    },
-    onTargetSelectionChange() {
-      this.updateSelectAllState()
-    },
-    onSelectAllChange() {
-      if (this.selectAll) {
-        this.selectedTargets = this.targetsList.map((_, idx) => idx)
-      } else {
-        this.selectedTargets = []
-      }
-    },
-    updateSelectAllState() {
-      this.selectAll = this.selectedTargets.length === this.targetsList.length && this.targetsList.length > 0
-    },
-    async detectImage() {
-      if (!this.selectedFile) {
-        this.errorMessage = '请先选择图片'
-        return
-      }
-
-      this.isProcessing = true
-      this.errorMessage = ''
-      this.targetsList = []
-      this.selectedTargets = []
-      this.reportData = null
-      this.selectAll = false
-
-      const formData = new FormData()
-      formData.append('image', this.selectedFile)
-
-      try {
-        const startTime = Date.now()
-        const infoResult = await detectImage(formData)
-        this.processingTime = Date.now() - startTime
-
-        if (infoResult.status === 'success') {
-          this.targetsList = infoResult.targets.map((target) => ({
-            bbox: target.bbox,
-            label: target.label,
-            confidence: target.confidence
-          }))
-          if (this.originalImage) {
-            this.redrawCanvasWithHighlights()
-          }
-        } else {
-          throw new Error(infoResult.error || '目标检测失败')
-        }
-      } catch (error) {
-        console.error('图片检测失败:', error)
-        this.errorMessage = error.message || '检测失败，请稍后重试'
-        const canvas = this.$refs.resultCanvas
-        if (canvas && this.canvasContext && this.originalImage) {
-          this.canvasContext.drawImage(this.originalImage, 0, 0)
-        }
-      } finally {
-        this.isProcessing = false
-      }
-    },
-    async generateReport() {
-      if (this.selectedTargets.length === 0) {
-        this.errorMessage = '请至少选择一个目标'
-        return
-      }
-
-      this.isGeneratingReport = true
-      this.errorMessage = ''
-      this.reportData = null
-
-      const formData = new FormData()
-      formData.append('image', this.selectedFile)
-      formData.append('selected_indices', JSON.stringify(this.selectedTargets))
-
-      try {
-        const res = await generateReport(formData)
-        if (res.status === 'success') {
-          this.reportData = res.report
-        } else {
-          throw new Error(res.error || '生成报告失败')
-        }
-      } catch (error) {
-        console.error('生成报告失败:', error)
-        this.errorMessage = error.message || '生成报告失败，请稍后重试'
-      } finally {
-        this.isGeneratingReport = false
-      }
-    },
-    downloadReportAsHtml() {
-      if (!this.reportData) {
-        return
-      }
-
-      const reportHtml = `
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>水果检测报告</title>
-  <style>
-    body { font-family: "Segoe UI", "Microsoft YaHei", Arial, sans-serif; padding: 20px; background: #f5f7fa; }
-    .container { max-width: 1200px; margin: 0 auto; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
-    h1 { color: #2c3e50; border-bottom: 2px solid #409eff; padding-bottom: 10px; }
-    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
-    th { background: #f2f2f2; font-weight: 600; }
-    .footer { margin-top: 20px; text-align: center; color: #7f8c8d; font-size: 12px; }
-  </style>
-</head>
-<body>
-  <div class="container">
-    <h1>水果检测报告</h1>
-    <p>生成时间: ${new Date().toLocaleString()}</p>
-    <p>共检测到 ${this.reportData.total_targets} 个目标</p>
-    <table>
-      <thead>
-        <tr>
-          <th>序号</th>
-          <th>框坐标</th>
-          <th>水果分类</th>
-          <th>分类置信度</th>
-          <th>成熟度</th>
-          <th>成熟度置信度</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${this.reportData.targets.map((item, idx) => `
-          <tr>
-            <td>${idx + 1}</td>
-            <td>[${item.bbox.join(',')}]</td>
-            <td>${item.fruit_classification.class}</td>
-            <td>${(item.fruit_classification.confidence * 100).toFixed(1)}%</td>
-            <td>${item.ripeness ? item.ripeness.predicted_class : '不适用'}</td>
-            <td>${item.ripeness ? (item.ripeness.confidence * 100).toFixed(1) + '%' : '-'}</td>
-          </tr>
-        `).join('')}
-      </tbody>
-    </table>
-    <div class="footer">本报告由智能水果检测系统自动生成</div>
-  </div>
-</body>
-</html>
-      `
-
-      const blob = new Blob([reportHtml], { type: 'text/html' })
-      const link = document.createElement('a')
-      link.href = URL.createObjectURL(blob)
-      link.download = `fruit_report_${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.html`
-      link.click()
-      URL.revokeObjectURL(link.href)
-    },
-    clearAll() {
-      this.selectedFile = null
-      if (this.originalImageUrl) {
-        URL.revokeObjectURL(this.originalImageUrl)
-      }
-      this.originalImageUrl = null
-      this.originalImage = null
-      this.targetsList = []
-      this.selectedTargets = []
-      this.selectAll = false
-      this.reportData = null
-      this.errorMessage = ''
-      this.processingTime = 0
-      this.canvasWidth = 0
-      this.canvasHeight = 0
-      if (this.$refs.fileInput) {
-        this.$refs.fileInput.value = ''
-      }
-
-      const canvas = this.$refs.resultCanvas
-      if (canvas && this.canvasContext) {
-        this.canvasContext.clearRect(0, 0, canvas.width, canvas.height)
-      }
+    normalizedDetailItems() {
+      const items = this.currentDetail?.detail_data?.items || []
+      return items.map((item) => ({
+        ...item,
+        originalImageUrl: this.resolveMediaUrl(item.original_image),
+        rightImageUrl: this.resolveMediaUrl(item.right_image),
+        annotatedImageUrl: this.resolveMediaUrl(item.annotated_image)
+      }))
     }
+  },
+  mounted() {
+    this.dismissedIds = loadDismissedIds()
+    this.fetchRecentResults()
   },
   beforeUnmount() {
-    if (this.originalImageUrl) {
-      URL.revokeObjectURL(this.originalImageUrl)
+    this.resetPendingUploads()
+  },
+  methods: {
+    onSingleInputsSelected(event) {
+      const files = Array.from(event.target.files || [])
+      files.forEach((file) => {
+        if (!this.isSupportedUpload(file)) return
+        this.singleInputs.push(this.buildUploadItem(file))
+      })
+      event.target.value = ''
+    },
+    onDiameterInputsSelected(event) {
+      const files = Array.from(event.target.files || [])
+      files.forEach((file) => {
+        if (!this.isSupportedUpload(file)) return
+        this.diameterInputs.push(this.buildUploadItem(file))
+      })
+      event.target.value = ''
+    },
+    isSupportedUpload(file) {
+      const lowerName = String(file.name || '').toLowerCase()
+      return lowerName.endsWith('.zip') || file.type.startsWith('image/')
+    },
+    isArchiveFile(file) {
+      return String(file.name || '').toLowerCase().endsWith('.zip')
+    },
+    buildUploadItem(file) {
+      const isArchive = this.isArchiveFile(file)
+      return {
+        uid: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
+        file,
+        name: file.name,
+        size: file.size,
+        isArchive,
+        previewUrl: !isArchive && file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
+        kindLabel: isArchive ? '压缩包' : '图片'
+      }
+    },
+    removeSingleInput(uid) {
+      const target = this.singleInputs.find((item) => item.uid === uid)
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+      this.singleInputs = this.singleInputs.filter((item) => item.uid !== uid)
+    },
+    removeDiameterInput(uid) {
+      const target = this.diameterInputs.find((item) => item.uid === uid)
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+      this.diameterInputs = this.diameterInputs.filter((item) => item.uid !== uid)
+    },
+    async submitTask() {
+      this.errorMessage = ''
+
+      if (!this.singleInputs.length && !this.diameterInputs.length) {
+        this.errorMessage = '请至少上传单图片输入或果径图片输入。'
+        return
+      }
+
+      const formData = new FormData()
+      formData.append('detect_ripeness', this.options.detectRipeness ? 'true' : 'false')
+
+      this.singleInputs.forEach((item) => {
+        formData.append('single_inputs', item.file)
+      })
+      this.diameterInputs.forEach((item) => {
+        formData.append('diameter_inputs', item.file)
+      })
+
+      this.submitting = true
+      try {
+        const res = await createImageDetectionTask(formData)
+        restoreHistoryId(res.history_id)
+        this.dismissedIds = loadDismissedIds()
+        this.resetPendingUploads()
+        await this.fetchRecentResults()
+        ElMessage.success('图片检测完成，结果已写入检测历史。')
+      } catch (error) {
+        console.error('create image detection task failed', error)
+        this.errorMessage = error?.response?.data?.error || error.message || '图片检测失败，请稍后重试。'
+      } finally {
+        this.submitting = false
+      }
+    },
+    async fetchRecentResults() {
+      this.loadingRecent = true
+      try {
+        const res = await getDetectionHistoryList({
+          detection_type: 'image',
+          page: 1,
+          page_size: 20
+        })
+        this.recentRecords = (res.results || res || []).map((item) => ({
+          ...item
+        }))
+        this.errorMessage = ''
+      } catch (error) {
+        console.error('load recent image detection records failed', error)
+        this.errorMessage = '获取最近图片检测结果失败。'
+      } finally {
+        this.loadingRecent = false
+      }
+    },
+    dismissRecord(id) {
+      this.dismissedIds = dismissHistoryId(id)
+    },
+    restoreDismissed() {
+      this.dismissedIds = []
+      saveDismissedIds([])
+    },
+    async viewDetail(record) {
+      try {
+        this.currentDetail = await getDetectionHistoryDetail(record.id)
+        this.detailVisible = true
+      } catch (error) {
+        console.error('load image detection detail failed', error)
+        ElMessage.error('获取详情失败')
+      }
+    },
+    downloadReport(record) {
+      const targetUrl = record.report_url || this.resolveMediaUrl(record.report_file)
+      if (!targetUrl) {
+        ElMessage.warning('该记录没有可下载的报告文件。')
+        return
+      }
+      const anchor = document.createElement('a')
+      anchor.href = targetUrl
+      anchor.download = (record.report_file || 'image_detection_report.xlsx').split('/').pop()
+      document.body.appendChild(anchor)
+      anchor.click()
+      document.body.removeChild(anchor)
+    },
+    goToHistory() {
+      this.$router.push('/history')
+    },
+    resolveMediaUrl(path) {
+      if (!path) return ''
+      if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/media/')) return path
+      return `/media/${String(path).replace(/^\/+/, '')}`
+    },
+    resolveRecordCover(record) {
+      return record.cover_image_url || this.resolveMediaUrl(record.cover_image)
+    },
+    resetPendingUploads() {
+      this.singleInputs.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      })
+      this.diameterInputs.forEach((item) => {
+        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
+      })
+      this.singleInputs = []
+      this.diameterInputs = []
+    },
+    formatDateTime(value) {
+      return value ? new Date(value).toLocaleString('zh-CN') : '-'
+    },
+    formatFileSize(size) {
+      if (!size) return '0 B'
+      if (size < 1024) return `${size} B`
+      if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+      return `${(size / (1024 * 1024)).toFixed(2)} MB`
+    },
+    formatDiameter(value) {
+      return value === null || value === undefined ? '-' : Number(value).toFixed(2)
+    },
+    compactTitle(record) {
+      const title = record.title || `图片检测 #${record.id}`
+      return title.length > 26 ? `${title.slice(0, 26)}...` : title
+    },
+    sourceLabel(record) {
+      return record.options?.source === 'stereo_camera' ? '双目相机' : '上传文件'
+    },
+    operationTags(record) {
+      const tags = []
+      if (record.options?.detect_classification) tags.push('种类')
+      if (record.options?.detect_ripeness) tags.push('熟度')
+      if (record.options?.detect_diameter) tags.push('果径')
+      return tags.length ? tags : ['检测']
+    },
+    compactSummary(record) {
+      const summary = record.summary || {}
+      const parts = [
+        `输入 ${record.input_count ?? summary.input_count ?? 0} 项`,
+        `目标 ${summary.total_targets ?? 0} 个`
+      ]
+      if (summary.valid_measurements) parts.push(`有效果径 ${summary.valid_measurements} 个`)
+      return parts.join(' · ')
+    },
+    detailTypeLabel(itemType) {
+      if (itemType === 'diameter_group') return '果径图片组'
+      if (itemType === 'camera_diameter') return '双目实时果径测量'
+      return '单图片输入'
     }
   }
 }
@@ -583,7 +502,7 @@ export default {
 }
 
 .page-shell {
-  max-width: 1440px;
+  max-width: 1460px;
   margin: 0 auto;
   display: grid;
   gap: 20px;
@@ -593,7 +512,7 @@ export default {
 .panel-card {
   border-radius: 24px;
   border: none;
-  background: rgba(255, 255, 255, 0.94);
+  background: rgba(255, 255, 255, 0.95);
   box-shadow: 0 20px 42px rgba(27, 51, 40, 0.08);
 }
 
@@ -639,51 +558,6 @@ export default {
   padding: 0 14px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
-  color: #eff8f4;
-}
-
-.guide-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.guide-step {
-  display: flex;
-  gap: 14px;
-  padding: 18px 20px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 14px 34px rgba(29, 54, 44, 0.06);
-}
-
-.guide-index {
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #173b32;
-  color: #f6fbf8;
-  font-weight: 700;
-}
-
-.guide-step h3,
-.panel-header h2,
-.empty-card-state h3 {
-  margin: 0 0 6px;
-  font-size: 18px;
-  color: #18352b;
-}
-
-.guide-step p,
-.panel-header p,
-.empty-card-state p {
-  margin: 0;
-  line-height: 1.7;
-  color: #557064;
 }
 
 .error-banner {
@@ -699,7 +573,7 @@ export default {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.45fr) 420px;
+  grid-template-columns: minmax(0, 1.25fr) 420px;
   gap: 20px;
   align-items: start;
 }
@@ -727,29 +601,54 @@ export default {
   margin-bottom: 16px;
 }
 
-.panel-badge {
-  display: inline-flex;
+.panel-header h2 {
+  margin: 0 0 6px;
+  font-size: 18px;
+  color: #18352b;
+}
+
+.panel-header p {
+  margin: 0;
+  line-height: 1.7;
+  color: #557064;
+}
+
+.option-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.option-grid--single {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.option-item {
+  display: flex;
+  gap: 10px;
   align-items: center;
-  min-height: 32px;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: #eef9f3;
-  color: #18533a;
-  font-size: 13px;
+  min-height: 52px;
+  padding: 0 16px;
+  border-radius: 16px;
+  background: #f6faf7;
+  color: #18352b;
+}
+
+.empty-inline-tip {
+  color: #557064;
+  line-height: 1.7;
 }
 
 .upload-area {
   border: 2px dashed #cdd9d3;
   border-radius: 20px;
-  padding: 56px 20px;
+  padding: 42px 20px;
   text-align: center;
   cursor: pointer;
   transition: all 0.25s ease;
   background: linear-gradient(180deg, #f9fbfa 0%, #f2f7f4 100%);
 }
 
-.upload-area:hover,
-.upload-area.drag-over {
+.upload-area:hover {
   border-color: #2f6c59;
   background: #eef6f2;
 }
@@ -768,7 +667,8 @@ export default {
   border-radius: 20px;
   background: #173b32;
   color: #f6fbf8;
-  font-size: 30px;
+  font-size: 28px;
+  font-weight: 700;
 }
 
 .upload-text {
@@ -783,160 +683,130 @@ export default {
   color: #7a9086;
 }
 
-.action-row,
-.report-actions {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 16px;
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px;
+  margin-top: 18px;
 }
 
-.file-meta-card {
-  display: flex;
-  gap: 12px;
-  flex-wrap: wrap;
-  margin-top: 16px;
-  padding: 14px 16px;
-  border-radius: 16px;
-  background: #f6faf7;
-  color: #587166;
-  font-size: 13px;
-}
-
-.canvas-stage {
-  border-radius: 22px;
-  overflow: hidden;
-  background: linear-gradient(140deg, #0f172a 0%, #1a2c43 100%);
-}
-
-.canvas-wrapper {
+.preview-card,
+.result-card {
   position: relative;
-  overflow: auto;
-  text-align: center;
-  min-height: 420px;
+  border-radius: 18px;
+  background: #f8fbf9;
+  border: 1px solid #e7efea;
+  overflow: hidden;
 }
 
-.result-canvas {
-  display: block;
-  max-width: 100%;
-  height: auto !important;
-  margin: 0 auto;
+.preview-card {
+  padding: 12px;
 }
 
-.empty-overlay {
-  position: absolute;
-  inset: 0;
+.preview-visual {
+  border-radius: 14px;
+  overflow: hidden;
+}
+
+.preview-image,
+.result-cover,
+.detail-image {
+  width: 100%;
+  object-fit: cover;
+  border-radius: 14px;
+}
+
+.preview-image,
+.result-cover {
+  aspect-ratio: 1 / 1;
+}
+
+.archive-placeholder {
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(236, 244, 241, 0.9);
-}
-
-.processing-overlay {
-  position: absolute;
-  inset: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  align-items: center;
-  justify-content: center;
-  background: rgba(15, 23, 42, 0.5);
-  color: #fff;
-}
-
-.spinner {
-  width: 34px;
-  height: 34px;
-  border: 3px solid rgba(255, 255, 255, 0.24);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin 1s linear infinite;
-}
-
-.empty-card-state,
-.empty-inline-tip {
-  padding: 18px 0 4px;
-  line-height: 1.7;
-  color: #557064;
-}
-
-.targets-list {
-  display: grid;
-  gap: 10px;
-}
-
-.target-item {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 14px;
-  border-radius: 16px;
-  background: #f7faf8;
-  border: 1px solid transparent;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.target-item:hover {
-  border-color: rgba(36, 84, 70, 0.12);
-}
-
-.target-selected {
-  background: #eef6ff;
-  border-color: rgba(59, 130, 246, 0.28);
-}
-
-.target-copy {
-  display: grid;
-  gap: 6px;
-}
-
-.target-label {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #173b32 0%, #3a7a65 100%);
+  color: #f6fbf8;
+  font-size: 28px;
   font-weight: 700;
-  color: #173b32;
 }
 
-.target-bbox {
-  font-size: 13px;
-  color: #6b8579;
+.preview-meta,
+.result-copy {
+  display: grid;
+  gap: 4px;
+  margin-top: 10px;
 }
 
-.confidence-badge {
-  margin-left: 8px;
-  padding: 2px 8px;
+.result-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0;
+}
+
+.result-tag {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
   border-radius: 999px;
-  background: rgba(23, 59, 50, 0.08);
-  color: #2f6c59;
+  background: #eef4f1;
+  color: #355b4d;
   font-size: 12px;
 }
 
-.table-shell {
-  overflow: auto;
+.result-tag--accent {
+  background: #e8f1ed;
+  color: #1f6a4d;
 }
 
-.report-table {
-  width: 100%;
-  border-collapse: collapse;
+.preview-meta strong,
+.result-copy strong {
+  color: #18352b;
 }
 
-.report-table th,
-.report-table td {
-  padding: 12px 10px;
-  border-bottom: 1px solid #e5ece8;
-  text-align: left;
+.preview-meta span,
+.result-copy span {
+  color: #6b8579;
   font-size: 13px;
 }
 
-.report-table th {
-  color: #587166;
-  font-weight: 700;
+.remove-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 1;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(16, 24, 40, 0.72);
+  color: #fff;
+  cursor: pointer;
 }
 
-.tips-list {
-  margin: 0;
-  padding-left: 18px;
-  color: #557064;
-  line-height: 1.9;
+.result-list {
+  display: grid;
+  gap: 14px;
+}
+
+.result-card {
+  padding: 16px;
+}
+
+.result-actions,
+.action-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.result-actions {
+  margin-top: 14px;
 }
 
 .btn {
@@ -974,10 +844,48 @@ export default {
   color: #244538;
 }
 
-@keyframes spin {
-  to {
-    transform: rotate(360deg);
-  }
+.btn-mini {
+  min-width: 0;
+  padding: 8px 12px;
+  font-size: 13px;
+  border-radius: 12px;
+}
+
+.detail-shell {
+  display: grid;
+  gap: 20px;
+}
+
+.detail-summary p {
+  margin: 0 0 8px;
+}
+
+.detail-item {
+  display: grid;
+  gap: 16px;
+  padding: 18px;
+  border-radius: 18px;
+  background: #f8fbf9;
+}
+
+.detail-image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 14px;
+}
+
+.detail-figure {
+  margin: 0;
+}
+
+.detail-image {
+  aspect-ratio: 4 / 3;
+}
+
+.detail-figure figcaption {
+  margin-top: 8px;
+  color: #557064;
+  text-align: center;
 }
 
 @media (max-width: 1320px) {
@@ -992,10 +900,6 @@ export default {
 
 @media (max-width: 980px) {
   .hero {
-    grid-template-columns: 1fr;
-  }
-
-  .guide-strip {
     grid-template-columns: 1fr;
   }
 }
@@ -1014,17 +918,9 @@ export default {
   }
 
   .action-row,
-  .report-actions,
-  .file-meta-card {
-    flex-direction: column;
-  }
-
+  .result-actions,
   .panel-header {
     flex-direction: column;
-  }
-
-  .canvas-wrapper {
-    min-height: 280px;
   }
 }
 </style>
