@@ -1,8 +1,6 @@
 from django.apps import apps
 from django.conf import settings
-from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
-from django.shortcuts import render
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
@@ -46,10 +44,6 @@ def _camera_preview_ws_path():
     return "/ws/camera/preview/"
 
 
-def _camera_debug_url():
-    return "/camera/debug/"
-
-
 def _get_camera_service():
     return get_stereo_camera_service(default_config=getattr(settings, "CAMERA_CONFIG", {}))
 
@@ -67,29 +61,12 @@ def _get_preview_manager():
     )
 
 
-@login_required
-def camera_debug_page(request):
-    return render(
-        request,
-        "camera/debug.html",
-        {
-            "camera_stream_url": _camera_stream_url(),
-            "camera_preview_ws_path": _camera_preview_ws_path(),
-            "camera_status_url": "/api/camera/status/",
-            "camera_start_url": "/api/camera/start/",
-            "camera_stop_url": "/api/camera/stop/",
-            "camera_measure_url": "/api/camera/measure/",
-        },
-    )
-
-
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def camera_status(request):
     payload = _get_camera_service().status()
     payload["stream_url"] = _camera_stream_url()
     payload["preview_ws_path"] = _camera_preview_ws_path()
-    payload["debug_url"] = _camera_debug_url()
     payload["registry"] = get_camera_registry_service().snapshot()
     return Response(payload, status=status.HTTP_200_OK)
 
@@ -194,7 +171,6 @@ def camera_start(request):
 
     payload["stream_url"] = _camera_stream_url()
     payload["preview_ws_path"] = _camera_preview_ws_path()
-    payload["debug_url"] = _camera_debug_url()
     _get_preview_manager().notify_camera_started()
     return Response(payload, status=status.HTTP_200_OK)
 
@@ -214,7 +190,8 @@ def camera_stop(request):
     )
 
 
-@login_required
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
 def camera_stream(request):
     detect = request.GET.get("detect", "0") in {"1", "true", "True"}
     try:
@@ -310,7 +287,6 @@ def camera_device_frame(request, camera_index: int):
 
 
 __all__ = [
-    "camera_debug_page",
     "camera_calibration_capture",
     "camera_calibration_run",
     "camera_calibration_status",

@@ -101,6 +101,58 @@ class DetectionHistoryApiTests(APITestCase):
         resp = self.client.get(f'/api/detection/history/{row.id}/')
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
+    def test_history_list_returns_source_entries_for_image_records(self):
+        row = DetectionHistory.objects.create(
+            user=self.user,
+            detection_type='image',
+            summary={'x': 1},
+            detail_data={
+                'items': [
+                    {
+                        'item_type': 'image',
+                        'display_name': 'apple.png',
+                        'original_image': 'image_tasks/task-1/apple.png',
+                        'archive_name': None,
+                    },
+                    {
+                        'item_type': 'image',
+                        'display_name': 'left.png',
+                        'original_image': 'image_tasks/task-1/left.png',
+                        'archive_name': 'camera_capture_bundle_20260502_180402.zip',
+                    },
+                    {
+                        'item_type': 'image',
+                        'display_name': 'right.png',
+                        'original_image': 'image_tasks/task-1/right.png',
+                        'archive_name': 'camera_capture_bundle_20260502_180402.zip',
+                    },
+                ]
+            },
+        )
+
+        resp = self.client.get('/api/detection/history/?detection_type=image')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+
+        payload = resp.data.get('results', resp.data)
+        current = next(item for item in payload if item['id'] == row.id)
+        self.assertEqual(
+            current['source_entries'],
+            [
+                {
+                    'label': 'apple.png',
+                    'kind': 'image',
+                    'url': '/media/image_tasks/task-1/apple.png',
+                    'item_type': 'image',
+                },
+                {
+                    'label': 'camera_capture_bundle_20260502_180402.zip',
+                    'kind': 'archive',
+                    'url': None,
+                    'item_type': 'image',
+                },
+            ],
+        )
+
     def test_history_delete_also_removes_report_file(self):
         td = os.path.join(settings.BASE_DIR, 'media', 'test_history_delete')
         shutil.rmtree(td, ignore_errors=True)
@@ -915,18 +967,68 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
 
     @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
     def test_camera_capture_success(self, mock_get_capture_service):
-        mock_get_capture_service.return_value.capture.return_value = [
-            {
-                'id': 'cap-1',
-                'capture_mode': 'single',
-                'files': [{'file_url': '/media/camera_captures/single/test.jpg'}],
-            }
-        ]
+        mock_get_capture_service.return_value.capture.return_value = {
+            'persisted': True,
+            'records': [
+                {
+                    'id': 'cap-1',
+                    'capture_mode': 'single',
+                    'files': [{'file_url': '/media/camera_captures/single/test.jpg'}],
+                }
+            ],
+            'staged_groups': [],
+        }
 
         resp = self.client.post('/api/camera/capture/', {'camera_indices': [0]}, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
         self.assertEqual(resp.data['records'][0]['id'], 'cap-1')
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_stage_success(self, mock_get_capture_service):
+        mock_get_capture_service.return_value.capture.return_value = {
+            'persisted': False,
+            'records': [],
+            'staged_groups': [
+                {
+                    'stage_id': 'stage-1',
+                    'capture_mode': 'dual',
+                    'files': [{'role': 'left', 'file_name': 'left.jpg'}, {'role': 'right', 'file_name': 'right.jpg'}],
+                }
+            ],
+        }
+
+        resp = self.client.post('/api/camera/capture/', {'camera_indices': [0, 1], 'persist': False}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertFalse(resp.data['persisted'])
+        self.assertEqual(resp.data['staged_groups'][0]['stage_id'], 'stage-1')
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_stage_save_returns_bundle_record(self, mock_get_capture_service):
+        mock_get_capture_service.return_value.save_staged.return_value = {
+            'id': 'bundle-1',
+            'capture_mode': 'bundle',
+            'group_count': 3,
+            'archive_name': 'camera_capture_bundle_20260502_160000.zip',
+            'archive_file_url': '/media/camera_captures/bundles/20260502/camera_capture_bundle_20260502_160000.zip',
+        }
+
+        resp = self.client.post('/api/camera/capture/save/', {'stage_ids': ['s1', 's2', 's3']}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data['record']['capture_mode'], 'bundle')
+        self.assertEqual(resp.data['record']['group_count'], 3)
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_delete_success(self, mock_get_capture_service):
+        resp = self.client.delete('/api/camera/captures/record-1/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_get_capture_service.return_value.delete_record.assert_called_once_with(
+            user_id=self.user.id,
+            record_id='record-1',
+        )
 
     @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
     def test_camera_capture_download_returns_zip(self, mock_get_capture_service):
@@ -969,6 +1071,44 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.data['mode'], 'single')
         mock_run_single.assert_called_once()
 
+    @patch('fruit_api.views_modules.realtime_runtime_views.run_single_preview_frame_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.run_single_camera_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_single_uses_preview_frame_when_provided(
+        self,
+        mock_get_app_config,
+        mock_run_single,
+        mock_run_single_preview,
+    ):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_run_single_preview.return_value = {
+            'status': 'success',
+            'mode': 'single',
+            'camera_index': 2,
+            'targets': [],
+            'summary': {'total_targets': 0, 'fruit_counts': {}, 'ripeness_counts': {}},
+            'annotated_image_url': '/media/realtime_frames/preview.jpg',
+            'suggested_interval_ms': 1500,
+            'frame_source': 'preview',
+        }
+
+        resp = self.client.post(
+            '/api/realtime/detect/current-frame/',
+            {
+                'mode': 'single',
+                'camera_index': 2,
+                'frame_data_url': 'data:image/jpeg;base64,ZmFrZQ==',
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['frame_source'], 'preview')
+        mock_run_single_preview.assert_called_once()
+        mock_run_single.assert_not_called()
+
     @patch('fruit_api.views_modules.realtime_runtime_views.run_dual_camera_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
     def test_realtime_detect_current_frame_dual_success(self, mock_get_app_config, mock_run_dual):
@@ -990,6 +1130,103 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data['mode'], 'dual')
+        mock_run_dual.assert_called_once()
+
+    @patch('fruit_api.views_modules.realtime_runtime_views.run_hybrid_camera_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_hybrid_success(self, mock_get_app_config, mock_run_hybrid):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_run_hybrid.return_value = {
+            'status': 'success',
+            'mode': 'hybrid',
+            'camera_index': 0,
+            'left_camera_index': 1,
+            'right_camera_index': 2,
+            'targets': [],
+            'summary': {
+                'total_targets': 0,
+                'valid_measurements': 0,
+                'fruit_counts': {},
+                'ripeness_counts': {},
+                'statistics': {},
+            },
+            'annotated_image_url': '/media/realtime_frames/hybrid.jpg',
+            'suggested_interval_ms': 5000,
+        }
+
+        resp = self.client.post(
+            '/api/realtime/detect/current-frame/',
+            {
+                'mode': 'hybrid',
+                'detect_classification': True,
+                'detect_diameter': True,
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['mode'], 'hybrid')
+        mock_run_hybrid.assert_called_once()
+
+    def test_realtime_detect_current_frame_single_requires_classification(self):
+        resp = self.client.post(
+            '/api/realtime/detect/current-frame/',
+            {
+                'mode': 'single',
+                'detect_classification': False,
+                'detect_ripeness': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assert_error_payload(resp)
+
+    def test_realtime_detect_current_frame_hybrid_requires_classification(self):
+        resp = self.client.post(
+            '/api/realtime/detect/current-frame/',
+            {
+                'mode': 'hybrid',
+                'detect_classification': False,
+                'detect_ripeness': False,
+                'detect_diameter': True,
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assert_error_payload(resp)
+
+    @patch('fruit_api.views_modules.realtime_runtime_views.run_dual_camera_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_dual_forces_diameter(self, mock_get_app_config, mock_run_dual):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_run_dual.return_value = {
+            'status': 'success',
+            'mode': 'dual',
+            'left_camera_index': 1,
+            'right_camera_index': 2,
+            'targets': [],
+            'summary': {'total_targets': 0, 'valid_measurements': 0, 'fruit_counts': {}, 'ripeness_counts': {}, 'statistics': {}},
+            'annotated_image_url': '/media/diameter_tmp/dual.jpg',
+            'suggested_interval_ms': 5000,
+        }
+
+        resp = self.client.post(
+            '/api/realtime/detect/current-frame/',
+            {
+                'mode': 'dual',
+                'detect_classification': False,
+                'detect_diameter': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_run_dual.assert_called_once()
 
 
@@ -1447,6 +1684,140 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertEqual(len(payload['pair_results']), 3)
         self.assertTrue(all(item['validation_mode'] == 'individual_probe' for item in payload['pair_results']))
 
+    @patch('fruit_api.services.detection.realtime_pipeline_service._run_dual_realtime_detection_from_frames')
+    @patch('fruit_api.services.detection.realtime_pipeline_service.capture_dual_camera_frames')
+    @patch('fruit_api.services.detection.realtime_pipeline_service.get_cached_preview_frame_snapshot')
+    @patch('fruit_api.services.detection.realtime_pipeline_service.get_camera_registry_service')
+    def test_run_dual_camera_realtime_detection_reuses_cached_preview_frames(
+        self,
+        mock_get_registry_service,
+        mock_get_cached_preview_frame_snapshot,
+        mock_capture_dual_camera_frames,
+        mock_run_dual_from_frames,
+    ):
+        mock_get_registry_service.return_value.snapshot.return_value = {
+            'selection': {
+                'dual_left_camera_index': 1,
+                'dual_right_camera_index': 2,
+                'backend': 'CAP_DSHOW',
+            },
+            'suggested_intervals': {
+                'single_interval_ms': 1500,
+                'dual_interval_ms': 5000,
+            },
+        }
+        mock_get_cached_preview_frame_snapshot.return_value = {
+            'config': {
+                'mode': 'dual',
+                'left_camera_index': 1,
+                'right_camera_index': 2,
+            },
+            'captured_at': 123.456,
+            'single_frame': None,
+            'left_frame': np.zeros((12, 12, 3), dtype=np.uint8),
+            'right_frame': np.ones((12, 12, 3), dtype=np.uint8),
+        }
+        mock_run_dual_from_frames.return_value = {'status': 'success', 'frame_source': 'preview'}
+
+        from fruit_api.services.detection.realtime_pipeline_service import run_dual_camera_realtime_detection
+
+        payload = run_dual_camera_realtime_detection(app_config=Mock())
+
+        self.assertEqual(payload['frame_source'], 'preview')
+        mock_capture_dual_camera_frames.assert_not_called()
+        mock_run_dual_from_frames.assert_called_once()
+
+    @patch('fruit_api.services.camera.capture_service.capture_dual_camera_frames')
+    @patch('fruit_api.services.camera.capture_service.get_camera_registry_service')
+    def test_camera_capture_service_stages_then_saves_bundle_zip(self, mock_get_registry_service, mock_capture_dual):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_stage_save')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_get_registry_service.return_value.snapshot.return_value = {
+                'selection': {
+                    'preview_camera_indices': [0, 1],
+                    'single_camera_index': 0,
+                    'dual_left_camera_index': 0,
+                    'dual_right_camera_index': 1,
+                    'backend': '',
+                }
+            }
+            mock_capture_dual.return_value = (
+                np.zeros((24, 24, 3), dtype=np.uint8),
+                np.ones((24, 24, 3), dtype=np.uint8) * 255,
+            )
+
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                capture_payload = service.capture(
+                    user_id=1,
+                    camera_indices=[0, 1],
+                    capture_mode='dual',
+                    persist=False,
+                )
+                self.assertFalse(capture_payload['persisted'])
+                self.assertEqual(len(capture_payload['staged_groups']), 1)
+
+                stage_id = capture_payload['staged_groups'][0]['stage_id']
+                record = service.save_staged(user_id=1, stage_ids=[stage_id])
+
+                self.assertEqual(record['capture_mode'], 'bundle')
+                self.assertEqual(record['group_count'], 1)
+
+                archive_path = os.path.join(media_root, record['archive_file_path'].replace('/', os.sep))
+                self.assertTrue(os.path.exists(archive_path))
+
+                with zipfile.ZipFile(archive_path, 'r') as archive:
+                    names = archive.namelist()
+
+                group = record['groups'][0]
+                expected_names = {
+                    f"{group['group_name']}/{file_info['file_name']}"
+                    for file_info in group['files']
+                }
+                self.assertEqual(set(names), expected_names)
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_camera_capture_service_delete_record_removes_bundle_archive_and_index(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_delete')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                archive_rel = 'camera_captures/bundles/20260502/test_bundle.zip'
+                archive_path = os.path.join(media_root, archive_rel.replace('/', os.sep))
+                os.makedirs(os.path.dirname(archive_path), exist_ok=True)
+                with open(archive_path, 'wb') as handle:
+                    handle.write(b'zip')
+
+                service._save_index(
+                    {
+                        'records': [
+                            {
+                                'id': 'bundle-1',
+                                'user_id': 1,
+                                'archive_file_path': archive_rel,
+                                'archive_name': 'test_bundle.zip',
+                                'files': [],
+                            }
+                        ]
+                    }
+                )
+
+                service.delete_record(user_id=1, record_id='bundle-1')
+
+                self.assertFalse(os.path.exists(archive_path))
+                self.assertEqual(service._load_index()['records'], [])
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
     def test_validate_completed_task_raises_for_processing(self):
         task = SimpleNamespace(status='processing')
         with self.assertRaises(VideoTaskStateError):
@@ -1500,6 +1871,31 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertTrue(all(item['input_source'] == 'zip_archive' for item in singles))
         self.assertEqual(len(groups), 2)
         self.assertEqual(groups[0]['archive_name'], 'diameter.zip')
+
+    def test_resolve_image_detection_inputs_supports_nested_bundle_zip_for_diameter_inputs(self):
+        image_bytes = self._image_bytes()
+        inner_buffer = io.BytesIO()
+        with zipfile.ZipFile(inner_buffer, 'w') as inner_archive:
+            inner_archive.writestr('20260502_180402_group_01/20260502_180402_left.jpg', image_bytes)
+            inner_archive.writestr('20260502_180402_group_01/20260502_180402_right.jpg', image_bytes)
+
+        singles, groups = resolve_image_detection_inputs(
+            single_inputs=[],
+            diameter_inputs=[
+                self._zip_upload(
+                    'camera_captures_1777719490164.zip',
+                    {
+                        'camera_capture_bundle_20260502_180402_b78c90d1.zip': inner_buffer.getvalue(),
+                    },
+                )
+            ],
+        )
+
+        self.assertEqual(singles, [])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]['archive_name'], 'camera_captures_1777719490164.zip')
+        self.assertEqual(groups[0]['left_name'], '20260502_180402_left.jpg')
+        self.assertEqual(groups[0]['right_name'], '20260502_180402_right.jpg')
 
     def test_resolve_image_detection_inputs_rejects_illegal_archive_path(self):
         image_bytes = self._image_bytes()

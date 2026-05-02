@@ -9,9 +9,6 @@ from fruit_api.views_modules.auth_views import (  # noqa: F401
     change_password,
     csrf_cookie_view,
     get_user_info,
-    home_view,
-    login_view,
-    logout_view,
     register_view,
     update_profile,
 )
@@ -19,7 +16,6 @@ from fruit_api.views_modules.camera_views import (  # noqa: F401
     camera_calibration_capture,
     camera_calibration_run,
     camera_calibration_status,
-    camera_debug_page,
     camera_device_frame,
     camera_probe,
     camera_measure_current,
@@ -36,8 +32,10 @@ from fruit_api.views_modules.camera_registry_views import (  # noqa: F401
 )
 from fruit_api.views_modules.camera_capture_views import (  # noqa: F401
     camera_capture,
+    camera_capture_delete,
     camera_capture_list,
     camera_capture_download,
+    camera_capture_stage_save,
 )
 from fruit_api.views_modules.console_views import (  # noqa: F401
     console_overview,
@@ -77,9 +75,6 @@ from fruit_api.views_modules.video_views import (  # noqa: F401
 )
 
 __all__ = [
-    'login_view',
-    'home_view',
-    'logout_view',
     'register_view',
     'api_login_view',
     'api_logout_view',
@@ -87,7 +82,6 @@ __all__ = [
     'update_profile',
     'change_password',
     'get_user_info',
-    'camera_debug_page',
     'camera_device_frame',
     'camera_calibration_capture',
     'camera_calibration_run',
@@ -96,8 +90,10 @@ __all__ = [
     'camera_registry_scan',
     'camera_registry_select',
     'camera_capture',
+    'camera_capture_delete',
     'camera_capture_list',
     'camera_capture_download',
+    'camera_capture_stage_save',
     'camera_probe',
     'camera_status',
     'camera_start',

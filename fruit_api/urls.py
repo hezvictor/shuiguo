@@ -8,12 +8,6 @@ app_name = 'fruit_api'
 # daphne -b 0.0.0.0 -p 8000 shuiguo.asgi:application
 
 urlpatterns = [
-    # Frontend template pages (for local debug)
-    path('', views.login_view, name='login'),
-    path('home/', views.home_view, name='home'),
-    path('logout/', views.logout_view, name='logout'),
-    path('camera/debug/', views.camera_debug_page, name='camera_debug'),
-
     # API endpoints
     path(
         'api/',
@@ -59,8 +53,10 @@ urlpatterns = [
                 path('camera/stop/', views.camera_stop, name='camera_stop'),
                 path('camera/stream/', views.camera_stream, name='camera_stream'),
                 path('camera/capture/', views.camera_capture, name='camera_capture'),
+                path('camera/capture/save/', views.camera_capture_stage_save, name='camera_capture_stage_save'),
                 path('camera/captures/', views.camera_capture_list, name='camera_capture_list'),
                 path('camera/captures/download/', views.camera_capture_download, name='camera_capture_download'),
+                path('camera/captures/<str:record_id>/', views.camera_capture_delete, name='camera_capture_delete'),
                 path('camera/measure/', views.camera_measure_current, name='camera_measure_current'),
                 path('measure/runtime-status/', views.measure_runtime_status, name='measure_runtime_status'),
 

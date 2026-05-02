@@ -6,6 +6,9 @@ import os
 from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_DIST_DIR = Path(
+    os.environ.get("FRONTEND_DIST_DIR", str(BASE_DIR / "frontend_dist"))
+).resolve()
 
 
 def load_local_env(env_path: Path) -> None:
@@ -56,7 +59,7 @@ ROOT_URLCONF = "shuiguo.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [BASE_DIR / "templates"],
+        "DIRS": [],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [

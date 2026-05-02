@@ -10,6 +10,7 @@ class DetectionHistorySerializer(serializers.ModelSerializer):
     status_display = serializers.CharField(source="get_status_display", read_only=True)
     report_url = serializers.SerializerMethodField()
     cover_image_url = serializers.SerializerMethodField()
+    source_entries = serializers.SerializerMethodField()
 
     class Meta:
         model = DetectionHistory
@@ -32,6 +33,7 @@ class DetectionHistorySerializer(serializers.ModelSerializer):
             "cover_image_url",
             "report_file",
             "report_url",
+            "source_entries",
         ]
 
     @staticmethod
@@ -47,6 +49,66 @@ class DetectionHistorySerializer(serializers.ModelSerializer):
 
     def get_cover_image_url(self, obj):
         return self._media_url(obj.cover_image)
+
+    def get_source_entries(self, obj):
+        items = obj.detail_data.get("items", []) if isinstance(obj.detail_data, dict) else []
+        entries = []
+        seen = set()
+
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            archive_name = item.get("archive_name")
+            item_type = item.get("item_type")
+            display_name = item.get("display_name")
+            original_image = self._media_url(item.get("original_image"))
+
+            if archive_name:
+                key = ("archive", archive_name)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entries.append(
+                    {
+                        "label": archive_name,
+                        "kind": "archive",
+                        "url": None,
+                        "item_type": item_type,
+                    }
+                )
+                continue
+
+            if item_type == "image" and display_name:
+                key = ("image", display_name, original_image)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entries.append(
+                    {
+                        "label": display_name,
+                        "kind": "image",
+                        "url": original_image,
+                        "item_type": item_type,
+                    }
+                )
+                continue
+
+            if display_name:
+                key = ("group", display_name, item_type)
+                if key in seen:
+                    continue
+                seen.add(key)
+                entries.append(
+                    {
+                        "label": display_name,
+                        "kind": "group",
+                        "url": None,
+                        "item_type": item_type,
+                    }
+                )
+
+        return entries
 
 
 class DetectionHistoryListSerializer(DetectionHistorySerializer):
@@ -68,6 +130,7 @@ class DetectionHistoryListSerializer(DetectionHistorySerializer):
             "cover_image_url",
             "report_file",
             "report_url",
+            "source_entries",
         ]
 
 
@@ -199,6 +262,7 @@ class CameraCaptureSerializer(serializers.Serializer):
     left_camera_index = serializers.IntegerField(required=False, min_value=0)
     right_camera_index = serializers.IntegerField(required=False, min_value=0)
     backend = serializers.CharField(required=False, allow_blank=False)
+    persist = serializers.BooleanField(required=False, default=True)
 
     def validate(self, attrs):
         if attrs.get("capture_mode") == "dual":
@@ -213,25 +277,44 @@ class CameraCaptureDownloadSerializer(serializers.Serializer):
     record_ids = serializers.ListField(child=serializers.CharField(), allow_empty=False)
 
 
+class CameraCaptureStageSaveSerializer(serializers.Serializer):
+    stage_ids = serializers.ListField(child=serializers.CharField(), allow_empty=False)
+
+
 class RealtimeCurrentFrameDetectSerializer(serializers.Serializer):
-    mode = serializers.ChoiceField(choices=["single", "dual"])
+    mode = serializers.ChoiceField(choices=["single", "dual", "hybrid"])
     camera_index = serializers.IntegerField(required=False, min_value=0)
     left_camera_index = serializers.IntegerField(required=False, min_value=0)
     right_camera_index = serializers.IntegerField(required=False, min_value=0)
     conf = serializers.FloatField(required=False, min_value=0.01, max_value=1.0, default=0.25)
     detect_classification = serializers.BooleanField(required=False, default=True)
     detect_ripeness = serializers.BooleanField(required=False, default=False)
+    detect_diameter = serializers.BooleanField(required=False, default=False)
     backend = serializers.CharField(required=False, allow_blank=False)
+    frame_data_url = serializers.CharField(required=False, allow_blank=False)
 
     def validate(self, attrs):
         mode = attrs.get("mode")
         if attrs.get("detect_ripeness") and not attrs.get("detect_classification"):
             attrs["detect_classification"] = True
+        if mode == "single":
+            attrs["detect_diameter"] = False
+            if not attrs.get("detect_classification"):
+                raise serializers.ValidationError("单摄实时检测至少需要开启种类识别。")
         if mode == "dual":
+            attrs["detect_diameter"] = True
             left_index = attrs.get("left_camera_index")
             right_index = attrs.get("right_camera_index")
             if left_index is not None and right_index is not None and left_index == right_index:
                 raise serializers.ValidationError("双摄实时检测时左右相机不能相同。")
+        if mode == "hybrid":
+            attrs["detect_diameter"] = True
+            if not attrs.get("detect_classification"):
+                raise serializers.ValidationError("混合模式至少需要开启种类识别。")
+            left_index = attrs.get("left_camera_index")
+            right_index = attrs.get("right_camera_index")
+            if left_index is not None and right_index is not None and left_index == right_index:
+                raise serializers.ValidationError("混合模式下左右相机不能相同。")
         return attrs
 
 
