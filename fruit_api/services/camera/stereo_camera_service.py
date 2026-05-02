@@ -25,6 +25,9 @@ class CameraStateError(Exception):
     pass
 
 
+_TRANSIENT_CAPTURE_LOCK = threading.RLock()
+
+
 def _require_cv2():
     try:
         import cv2  # type: ignore
@@ -160,7 +163,7 @@ class StereoCameraConfig:
     frame_height: Optional[int] = None
     fps: Optional[int] = None
     split_mode: str = "left_right"
-    backend: Optional[str] = "CAP_DSHOW" if os.name == "nt" else None
+    backend: Optional[str] = None
 
     def to_payload(self) -> Dict[str, Optional[int]]:
         return asdict(self)
@@ -198,12 +201,18 @@ class StereoCameraService:
 
     @staticmethod
     def _backend_name_candidates(config: StereoCameraConfig) -> List[str]:
-        requested = (config.backend or "").strip()
-        candidates: List[str] = [requested] if requested else ["CAP_ANY"]
+        requested = (config.backend or "").strip().upper()
+        candidates: List[str] = []
+        if requested and requested not in {"AUTO", "DEFAULT"}:
+            candidates.append(requested)
         if os.name == "nt":
-            for name in ("CAP_DSHOW", "CAP_MSMF", "CAP_ANY"):
+            for name in ("CAP_MSMF", "CAP_DSHOW", "CAP_ANY"):
                 if name not in candidates:
                     candidates.append(name)
+        elif not candidates:
+            candidates.append("CAP_ANY")
+        elif "CAP_ANY" not in candidates:
+            candidates.append("CAP_ANY")
         return candidates
 
     @staticmethod
@@ -212,6 +221,15 @@ class StereoCameraService:
         if not backend_name or backend_name == "CAP_ANY":
             return cv2.CAP_ANY
         return getattr(cv2, backend_name, cv2.CAP_ANY)
+
+    @staticmethod
+    def _release_capture(capture) -> None:
+        if capture is None:
+            return
+        try:
+            capture.release()
+        except Exception:
+            return
 
     @staticmethod
     def _apply_capture_options(capture, config: StereoCameraConfig) -> None:
@@ -513,83 +531,115 @@ class StereoCameraService:
 
 
 def probe_camera_indices(max_index: int = 4, backend: Optional[str] = None) -> Dict[str, object]:
-    cv2 = _require_cv2()
-    effective_backend = backend or ("CAP_DSHOW" if os.name == "nt" else None)
-    config = StereoCameraConfig(backend=effective_backend)
-    backend_flag = StereoCameraService._backend_flag(config)
-
+    requested_backend = (backend or "").strip()
+    config = StereoCameraConfig(backend=requested_backend or None)
     results: List[Dict[str, object]] = []
-    for camera_index in range(max(0, int(max_index))):
-        capture = cv2.VideoCapture(camera_index, backend_flag)
-        opened = bool(capture is not None and capture.isOpened())
-        info: Dict[str, object] = {
+    cv2 = _require_cv2()
+
+    def probe_single_index(camera_index: int) -> Dict[str, object]:
+        attempted_backends: List[str] = []
+        partial_info: Optional[Dict[str, object]] = None
+
+        for backend_name in StereoCameraService._backend_name_candidates(config):
+            attempted_backends.append(backend_name)
+            capture = None
+            try:
+                capture = cv2.VideoCapture(camera_index, StereoCameraService._backend_flag_by_name(backend_name))
+                opened = bool(capture is not None and capture.isOpened())
+                info: Dict[str, object] = {
+                    "camera_index": camera_index,
+                    "opened": opened,
+                    "read_ok": False,
+                    "backend": requested_backend or "auto",
+                    "backend_used": backend_name,
+                }
+                if not opened:
+                    continue
+
+                StereoCameraService._apply_capture_options(capture, config)
+                fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
+                if fps > 0:
+                    info["fps"] = round(fps, 3)
+
+                for _ in range(StereoCameraService.OPEN_WARMUP_FRAMES):
+                    ok, frame = capture.read()
+                    if ok and frame is not None and frame.size > 0:
+                        height, width = frame.shape[:2]
+                        info["read_ok"] = True
+                        info["frame_width"] = int(width)
+                        info["frame_height"] = int(height)
+                        return info
+                    time.sleep(StereoCameraService.OPEN_WARMUP_DELAY)
+
+                if partial_info is None:
+                    partial_info = info
+            finally:
+                StereoCameraService._release_capture(capture)
+
+        if partial_info is not None:
+            partial_info["attempted_backends"] = attempted_backends
+            return partial_info
+
+        return {
             "camera_index": camera_index,
-            "opened": opened,
-            "backend": effective_backend or "CAP_ANY",
+            "opened": False,
+            "read_ok": False,
+            "backend": requested_backend or "auto",
+            "attempted_backends": attempted_backends,
         }
-        if opened:
-            ok, frame = capture.read()
-            info["read_ok"] = bool(ok and frame is not None)
-            if ok and frame is not None:
-                height, width = frame.shape[:2]
-                info["frame_width"] = int(width)
-                info["frame_height"] = int(height)
-            fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
-            if fps > 0:
-                info["fps"] = round(fps, 3)
-        results.append(info)
-        if capture is not None:
-            capture.release()
+
+    with _TRANSIENT_CAPTURE_LOCK:
+        for camera_index in range(max(0, int(max_index))):
+            results.append(probe_single_index(camera_index))
 
     opened_results = [item for item in results if item["opened"]]
+    readable_results = [item for item in opened_results if item.get("read_ok")]
     pair_results: List[Dict[str, object]] = []
-    opened_indices = [int(item["camera_index"]) for item in opened_results]
-    for left_index, right_index in combinations(opened_indices, 2):
-        left_capture = cv2.VideoCapture(left_index, backend_flag)
-        right_capture = cv2.VideoCapture(right_index, backend_flag)
+    readable_by_index = {int(item["camera_index"]): item for item in readable_results}
+    readable_indices = [int(item["camera_index"]) for item in readable_results]
+    for left_index, right_index in combinations(readable_indices, 2):
+        left_info = readable_by_index[left_index]
+        right_info = readable_by_index[right_index]
         pair_info: Dict[str, object] = {
             "left_camera_index": left_index,
             "right_camera_index": right_index,
-            "backend": effective_backend or "CAP_ANY",
-            "left_opened": bool(left_capture is not None and left_capture.isOpened()),
-            "right_opened": bool(right_capture is not None and right_capture.isOpened()),
-            "simultaneous_ok": False,
+            "backend": requested_backend or "auto",
+            "validation_mode": "individual_probe",
+            "left_opened": True,
+            "right_opened": True,
+            "left_read_ok": True,
+            "right_read_ok": True,
+            "simultaneous_ok": True,
+            "left_frame_width": left_info.get("frame_width"),
+            "left_frame_height": left_info.get("frame_height"),
+            "right_frame_width": right_info.get("frame_width"),
+            "right_frame_height": right_info.get("frame_height"),
+            "left_backend_used": left_info.get("backend_used"),
+            "right_backend_used": right_info.get("backend_used"),
         }
-        if pair_info["left_opened"] and pair_info["right_opened"]:
-            left_ok, left_frame = left_capture.read()
-            right_ok, right_frame = right_capture.read()
-            pair_info["left_read_ok"] = bool(left_ok and left_frame is not None)
-            pair_info["right_read_ok"] = bool(right_ok and right_frame is not None)
-            pair_info["simultaneous_ok"] = bool(
-                pair_info["left_read_ok"] and pair_info["right_read_ok"]
-            )
-            if left_ok and left_frame is not None:
-                left_h, left_w = left_frame.shape[:2]
-                pair_info["left_frame_width"] = int(left_w)
-                pair_info["left_frame_height"] = int(left_h)
-            if right_ok and right_frame is not None:
-                right_h, right_w = right_frame.shape[:2]
-                pair_info["right_frame_width"] = int(right_w)
-                pair_info["right_frame_height"] = int(right_h)
         pair_results.append(pair_info)
-        left_capture.release()
-        right_capture.release()
 
     results, pair_results, device_catalog = _enrich_probe_results_with_device_names(results, pair_results)
     successful_pairs = [item for item in pair_results if item["simultaneous_ok"]]
+    recommended_pair = None
+    if successful_pairs:
+        recommended_pair = [
+            successful_pairs[0]["left_camera_index"],
+            successful_pairs[0]["right_camera_index"],
+        ]
+    elif len(readable_results) >= 2:
+        recommended_pair = [
+            int(readable_results[0]["camera_index"]),
+            int(readable_results[1]["camera_index"]),
+        ]
     return {
-        "backend": effective_backend or "CAP_ANY",
+        "backend": requested_backend or "auto",
         "max_index": int(max_index),
         "results": results,
         "pair_results": pair_results,
         "device_catalog": device_catalog,
         "opened_count": len(opened_results),
-        "recommended_dual_pair": [
-            successful_pairs[0]["left_camera_index"],
-            successful_pairs[0]["right_camera_index"],
-        ]
-        if successful_pairs
-        else None,
+        "recommended_dual_pair": recommended_pair,
     }
 
 
@@ -601,3 +651,82 @@ def get_stereo_camera_service(default_config: Optional[Dict] = None) -> StereoCa
     if _camera_service is None:
         _camera_service = StereoCameraService(default_config=default_config)
     return _camera_service
+
+
+def capture_single_camera_frame(
+    camera_index: int,
+    *,
+    backend: Optional[str] = None,
+    frame_width: Optional[int] = None,
+    frame_height: Optional[int] = None,
+    fps: Optional[int] = None,
+) -> np.ndarray:
+    service = StereoCameraService(
+        default_config={
+            "camera_index": int(camera_index),
+            "backend": backend or None,
+            "frame_width": frame_width,
+            "frame_height": frame_height,
+            "fps": fps,
+        }
+    )
+    config = StereoCameraConfig(
+        source_mode="single",
+        camera_index=int(camera_index),
+        split_mode="left_right",
+        backend=backend or None,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        fps=fps,
+    )
+
+    with _TRANSIENT_CAPTURE_LOCK:
+        capture = None
+        try:
+            capture = service._open_capture(int(camera_index), config)
+            return service._read_frame(capture, f"camera {camera_index}")
+        finally:
+            StereoCameraService._release_capture(capture)
+
+
+def capture_dual_camera_frames(
+    left_camera_index: int,
+    right_camera_index: int,
+    *,
+    backend: Optional[str] = None,
+    frame_width: Optional[int] = None,
+    frame_height: Optional[int] = None,
+    fps: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    service = StereoCameraService(
+        default_config={
+            "left_camera_index": int(left_camera_index),
+            "right_camera_index": int(right_camera_index),
+            "backend": backend or None,
+            "frame_width": frame_width,
+            "frame_height": frame_height,
+            "fps": fps,
+        }
+    )
+    config = StereoCameraConfig(
+        source_mode="dual",
+        left_camera_index=int(left_camera_index),
+        right_camera_index=int(right_camera_index),
+        backend=backend or None,
+        frame_width=frame_width,
+        frame_height=frame_height,
+        fps=fps,
+    )
+
+    with _TRANSIENT_CAPTURE_LOCK:
+        left_capture = None
+        right_capture = None
+        try:
+            left_capture = service._open_capture(int(left_camera_index), config)
+            right_capture = service._open_capture(int(right_camera_index), config)
+            left = service._read_frame(left_capture, f"left camera {left_camera_index}")
+            right = service._read_frame(right_capture, f"right camera {right_camera_index}")
+            return service._resize_to_match(left, right)
+        finally:
+            StereoCameraService._release_capture(left_capture)
+            StereoCameraService._release_capture(right_capture)

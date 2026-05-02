@@ -10,6 +10,7 @@ from pathlib import Path
 from django.apps import AppConfig
 from django.conf import settings
 from django.contrib.auth import get_user_model
+from django.db.models.signals import post_migrate
 from django.db.utils import OperationalError, ProgrammingError
 
 
@@ -34,7 +35,7 @@ def should_skip_model_loading():
     return sys.argv[1] in MANAGEMENT_COMMANDS_WITHOUT_MODEL_LOADING
 
 
-def ensure_default_dev_superuser():
+def ensure_default_dev_superuser(**_kwargs):
     """Create a predictable local admin user for development if it is missing."""
     if not settings.DEBUG:
         return
@@ -261,7 +262,7 @@ class LoginAppConfig(AppConfig):
     def ready(self):
         self._reset_runtime_state()
         self._prepare_runtime_dirs()
-        ensure_default_dev_superuser()
+        post_migrate.connect(ensure_default_dev_superuser, sender=self, dispatch_uid="fruit_api.ensure_default_dev_superuser")
 
         # Management commands such as migrate/createsuperuser should not depend
         # on AI model files or third-party runtime side effects.

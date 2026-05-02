@@ -33,6 +33,10 @@ def load_rgb_image(image_file) -> Image.Image:
 
 
 def classify_fruit(img: Image.Image, app_config) -> Dict:
+    return classify_fruit_crop(img, app_config)
+
+
+def classify_fruit_crop(img: Image.Image, app_config) -> Dict:
     img_t = app_config.fruit_preprocess(img)
     batch_t = torch.unsqueeze(img_t, 0).to(app_config.device)
 
@@ -51,11 +55,11 @@ def classify_fruit(img: Image.Image, app_config) -> Dict:
 
 
 def classify_with_ripeness(img: Image.Image, app_config) -> Dict:
-    fruit_result = classify_fruit(img, app_config)
+    fruit_result = classify_fruit_crop(img, app_config)
     fruit_label = fruit_result['predicted_class']
 
-    model, classes = app_config.get_ripeness_info(fruit_label)
-    if model is None:
+    ripeness_result = classify_ripeness_for_fruit_crop(img, fruit_label, app_config)
+    if ripeness_result is None:
         return {
             'status': 'success',
             'fruit_type': fruit_label,
@@ -64,23 +68,10 @@ def classify_with_ripeness(img: Image.Image, app_config) -> Dict:
             'confidence': fruit_result['confidence'],
         }
 
-    img_t_ripe = app_config.ripeness_preprocess(img)
-    batch_t_ripe = torch.unsqueeze(img_t_ripe, 0).to(app_config.device)
-    with torch.no_grad():
-        ripe_output = model(batch_t_ripe)
-    ripe_probs = F.softmax(ripe_output, dim=1)[0]
-    ripe_conf, ripe_idx = torch.max(ripe_probs, 0)
-
-    prob_dict = {name: ripe_probs[i].item() for i, name in enumerate(classes)}
-
     return {
         'status': 'success',
         'fruit_type': fruit_label,
-        'ripeness_result': {
-            'predicted_class': classes[ripe_idx],
-            'confidence': ripe_conf.item(),
-            'probabilities': prob_dict,
-        },
+        'ripeness_result': ripeness_result,
     }
 
 
@@ -115,10 +106,26 @@ def classify_ripeness_by_type(img: Image.Image, fruit_type: str, app_config) -> 
     }
 
 
+def classify_ripeness_for_fruit_crop(img: Image.Image, fruit_label: str, app_config) -> Optional[Dict]:
+    model, classes = app_config.get_ripeness_info(fruit_label)
+    if model is None:
+        return None
+
+    img_t_ripe = app_config.ripeness_preprocess(img)
+    batch_t_ripe = torch.unsqueeze(img_t_ripe, 0).to(app_config.device)
+    with torch.no_grad():
+        ripe_output = model(batch_t_ripe)
+    ripe_probs = F.softmax(ripe_output, dim=1)[0]
+    ripe_conf, ripe_idx = torch.max(ripe_probs, 0)
+    return {
+        'predicted_class': classes[ripe_idx],
+        'confidence': ripe_conf.item(),
+        'probabilities': {name: ripe_probs[i].item() for i, name in enumerate(classes)},
+    }
+
+
 def yolo_boxes_image_bytes(img: Image.Image, app_config, conf: float = 0.25) -> bytes:
-    yolo_model = app_config.yolo_model
-    results = yolo_model.predict(source=img, conf=conf, save=False)
-    result = results[0]
+    result = run_yolo_prediction(img, app_config, conf=conf)
     boxes = result.boxes
 
     img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
@@ -140,9 +147,7 @@ def yolo_boxes_image_bytes(img: Image.Image, app_config, conf: float = 0.25) -> 
 
 
 def yolo_targets(img: Image.Image, app_config, conf: float = 0.25) -> List[Dict]:
-    yolo_model = app_config.yolo_model
-    results = yolo_model.predict(source=img, conf=conf, save=False)
-    result = results[0]
+    result = run_yolo_prediction(img, app_config, conf=conf)
     boxes = result.boxes
 
     targets: List[Dict] = []
@@ -154,6 +159,12 @@ def yolo_targets(img: Image.Image, app_config, conf: float = 0.25) -> List[Dict]
             label = result.names[cls]
             targets.append({'bbox': [x1, y1, x2, y2], 'label': label, 'confidence': score})
     return targets
+
+
+def run_yolo_prediction(img: Image.Image, app_config, conf: float = 0.25):
+    yolo_model = app_config.yolo_model
+    results = yolo_model.predict(source=img, conf=conf, save=False, verbose=False)
+    return results[0]
 
 
 def parse_selected_indices(raw: Optional[str]) -> Optional[List[int]]:
@@ -169,15 +180,7 @@ def parse_selected_indices(raw: Optional[str]) -> Optional[List[int]]:
 
 
 def build_report_data(img: Image.Image, app_config, selected_indices: Optional[List[int]] = None) -> Dict:
-    yolo_model = app_config.yolo_model
-    fruit_model = app_config.fruit_model
-    fruit_preprocess = app_config.fruit_preprocess
-    fruit_class_names = app_config.fruit_class_names
-    ripeness_preprocess = app_config.ripeness_preprocess
-    device = app_config.device
-
-    results = yolo_model.predict(source=img, conf=0.25, save=False)
-    result = results[0]
+    result = run_yolo_prediction(img, app_config, conf=0.25)
     boxes = result.boxes
 
     targets = []
@@ -189,29 +192,10 @@ def build_report_data(img: Image.Image, app_config, selected_indices: Optional[L
             x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
             cropped_img = img.crop((x1, y1, x2, y2))
 
-            img_t = fruit_preprocess(cropped_img)
-            batch_t = torch.unsqueeze(img_t, 0).to(device)
-            with torch.no_grad():
-                output = fruit_model(batch_t)
-            probs = F.softmax(output, dim=1)[0]
-            predicted_idx = torch.argmax(probs).item()
-            fruit_label = fruit_class_names[predicted_idx]
-            fruit_confidence = probs[predicted_idx].item()
-
-            model, classes = app_config.get_ripeness_info(fruit_label)
-            ripeness_result = None
-            if model:
-                img_t_ripe = ripeness_preprocess(cropped_img)
-                batch_t_ripe = torch.unsqueeze(img_t_ripe, 0).to(device)
-                with torch.no_grad():
-                    ripe_output = model(batch_t_ripe)
-                ripe_probs = F.softmax(ripe_output, dim=1)[0]
-                ripe_conf, ripe_idx = torch.max(ripe_probs, 0)
-                ripeness_result = {
-                    'predicted_class': classes[ripe_idx],
-                    'confidence': ripe_conf.item(),
-                    'probabilities': {classes[j]: ripe_probs[j].item() for j in range(len(classes))},
-                }
+            fruit_result = classify_fruit_crop(cropped_img, app_config)
+            fruit_label = fruit_result['predicted_class']
+            fruit_confidence = fruit_result['confidence']
+            ripeness_result = classify_ripeness_for_fruit_crop(cropped_img, fruit_label, app_config)
 
             targets.append(
                 {

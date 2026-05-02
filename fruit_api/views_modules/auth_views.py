@@ -3,6 +3,7 @@ from django.contrib.auth import login, logout
 from django.contrib.auth.decorators import login_required
 from django.shortcuts import redirect, render
 from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.conf import settings
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -50,6 +51,13 @@ def home_view(request):
 def logout_view(request):
     logout(request)
     return redirect('fruit_api:home')
+
+
+@ensure_csrf_cookie
+@api_view(['GET'])
+@permission_classes([AllowAny])
+def csrf_cookie_view(_request):
+    return Response({'status': 'success', 'message': 'CSRF cookie ready'})
 
 
 @csrf_exempt

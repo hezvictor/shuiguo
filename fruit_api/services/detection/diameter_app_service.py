@@ -1,5 +1,7 @@
+from pathlib import Path
 from typing import Dict, Optional
 
+from django.conf import settings
 from fruit_api.diameter_service import build_measure_service
 from fruit_api.models import DetectionHistory
 
@@ -44,7 +46,7 @@ def _save_history(user, payload: Dict) -> None:
         "inference_id": payload.get("inference_id"),
     }
 
-    report_file = payload.get("annotated_image_path") or payload.get("result_json_path")
+    report_file = _relative_media_path(payload.get("annotated_image_path")) or _relative_media_path(payload.get("result_json_path"))
     DetectionHistory.objects.create(
         user=user,
         detection_type="diameter",
@@ -120,3 +122,16 @@ def measure_and_save_history(
         report_file=payload.get("visualization_file"),
     )
     return payload
+
+
+def _relative_media_path(path_str: Optional[str]) -> Optional[str]:
+    if not path_str:
+        return None
+    path = Path(path_str)
+    if not path.is_absolute():
+        return path_str.replace("\\", "/")
+    media_root = Path(settings.MEDIA_ROOT).resolve()
+    try:
+        return path.resolve().relative_to(media_root).as_posix()
+    except ValueError:
+        return str(path.resolve())

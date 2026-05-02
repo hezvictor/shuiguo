@@ -14,16 +14,29 @@ class RealtimePayloadError(Exception):
 
 def validate_realtime_payload(data: Dict) -> None:
     required_keys = ['total_targets', 'fruit_counts', 'ripeness_counts']
-    if not all(k in data for k in required_keys):
-        raise RealtimePayloadError('缺少必要字段')
+    missing = [key for key in required_keys if key not in data]
+    if missing:
+        raise RealtimePayloadError(f'缺少必要字段: {", ".join(missing)}')
 
 
 def build_realtime_summary(data: Dict) -> Dict:
-    return {
-        'total_targets': data['total_targets'],
-        'fruit_counts': data['fruit_counts'],
-        'ripeness_counts': data['ripeness_counts'],
+    summary = {
+        'total_targets': int(data.get('total_targets') or 0),
+        'fruit_counts': data.get('fruit_counts') or {},
+        'ripeness_counts': data.get('ripeness_counts') or {},
     }
+    for key in [
+        'mode',
+        'interval_ms',
+        'sample_count',
+        'valid_measurements',
+        'statistics',
+        'camera_profile',
+        'runtime_device',
+    ]:
+        if key in data:
+            summary[key] = data.get(key)
+    return summary
 
 
 def save_realtime_report_file(summary: Dict) -> str:
@@ -36,11 +49,19 @@ def save_realtime_report_file(summary: Dict) -> str:
     return report_filename
 
 
-def create_realtime_history(user, summary: Dict, report_filename: str) -> None:
+def create_realtime_history(user, summary: Dict, report_filename: str, detail_data: Dict) -> None:
+    mode = summary.get('mode') or 'single'
     DetectionHistory.objects.create(
         user=user,
         detection_type='realtime',
+        title=f'实时检测会话({mode})',
+        options={
+            'mode': mode,
+            'interval_ms': summary.get('interval_ms'),
+            'camera_profile': summary.get('camera_profile'),
+        },
         summary=summary,
+        detail_data=detail_data,
         report_file=report_filename,
     )
 
@@ -49,7 +70,14 @@ def save_realtime_report(user, data: Dict) -> Dict:
     validate_realtime_payload(data)
     summary = build_realtime_summary(data)
     report_filename = save_realtime_report_file(summary)
-    create_realtime_history(user, summary, report_filename)
+    create_realtime_history(
+        user,
+        summary,
+        report_filename,
+        {
+            'session_report': data,
+        },
+    )
 
     return {
         'status': 'success',

@@ -1,3 +1,4 @@
+from django.conf import settings
 from rest_framework import serializers
 
 from .models import DetectionHistory
@@ -6,6 +7,9 @@ from .models import DetectionHistory
 class DetectionHistorySerializer(serializers.ModelSerializer):
     detection_type_display = serializers.CharField(source="get_detection_type_display", read_only=True)
     user_name = serializers.CharField(source="user.username", read_only=True)
+    status_display = serializers.CharField(source="get_status_display", read_only=True)
+    report_url = serializers.SerializerMethodField()
+    cover_image_url = serializers.SerializerMethodField()
 
     class Meta:
         model = DetectionHistory
@@ -15,10 +19,77 @@ class DetectionHistorySerializer(serializers.ModelSerializer):
             "user_name",
             "detection_type",
             "detection_type_display",
+            "title",
+            "status",
+            "status_display",
             "created_at",
+            "input_count",
+            "options",
             "summary",
+            "detail_data",
+            "artifacts",
+            "cover_image",
+            "cover_image_url",
             "report_file",
+            "report_url",
         ]
+
+    @staticmethod
+    def _media_url(value):
+        if not value:
+            return None
+        if isinstance(value, str) and (value.startswith("http://") or value.startswith("https://") or value.startswith("/media/")):
+            return value
+        return f"{settings.MEDIA_URL.rstrip('/')}/{value.lstrip('/')}"
+
+    def get_report_url(self, obj):
+        return self._media_url(obj.report_file)
+
+    def get_cover_image_url(self, obj):
+        return self._media_url(obj.cover_image)
+
+
+class DetectionHistoryListSerializer(DetectionHistorySerializer):
+    class Meta(DetectionHistorySerializer.Meta):
+        fields = [
+            "id",
+            "user",
+            "user_name",
+            "detection_type",
+            "detection_type_display",
+            "title",
+            "status",
+            "status_display",
+            "created_at",
+            "input_count",
+            "options",
+            "summary",
+            "cover_image",
+            "cover_image_url",
+            "report_file",
+            "report_url",
+        ]
+
+
+class ImageDetectionTaskCreateSerializer(serializers.Serializer):
+    detect_ripeness = serializers.BooleanField(required=False, default=False)
+    detect_classification = serializers.BooleanField(required=False, default=True)
+    detect_diameter = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        request = self.context["request"]
+        single_inputs = request.FILES.getlist("single_inputs")
+        diameter_inputs = request.FILES.getlist("diameter_inputs")
+
+        if not single_inputs and not diameter_inputs:
+            raise serializers.ValidationError("请至少上传单图片输入或果径图片输入")
+
+        if attrs.get("detect_ripeness"):
+            attrs["detect_classification"] = True
+
+        attrs["single_input_count"] = len(single_inputs)
+        attrs["diameter_input_count"] = len(diameter_inputs)
+        return attrs
 
 
 class ImageUploadSerializer(serializers.Serializer):
@@ -76,6 +147,14 @@ class StereoCameraStartSerializer(serializers.Serializer):
 class StereoCameraMeasureSerializer(serializers.Serializer):
     conf = serializers.FloatField(required=False, min_value=0.01, max_value=1.0, default=0.25)
     save_vis = serializers.BooleanField(required=False, default=True)
+    save_as_image_task = serializers.BooleanField(required=False, default=False)
+    detect_classification = serializers.BooleanField(required=False, default=True)
+    detect_ripeness = serializers.BooleanField(required=False, default=False)
+
+    def validate(self, attrs):
+        if attrs.get("detect_ripeness") and not attrs.get("detect_classification"):
+            attrs["detect_classification"] = True
+        return attrs
 
 
 class StereoCalibrationCaptureSerializer(serializers.Serializer):
@@ -89,6 +168,71 @@ class StereoCalibrationRunSerializer(serializers.Serializer):
     square_mm = serializers.FloatField(required=False, min_value=0.1, default=25.0)
     min_pairs = serializers.IntegerField(required=False, min_value=4, max_value=64, default=8)
     activate = serializers.BooleanField(required=False, default=True)
+
+
+class CameraRegistrySelectionSerializer(serializers.Serializer):
+    single_camera_index = serializers.IntegerField(required=False, min_value=0)
+    dual_left_camera_index = serializers.IntegerField(required=False, min_value=0)
+    dual_right_camera_index = serializers.IntegerField(required=False, min_value=0)
+    preview_camera_indices = serializers.ListField(
+        child=serializers.IntegerField(min_value=0),
+        required=False,
+        allow_empty=True,
+    )
+    backend = serializers.CharField(required=False, allow_blank=False)
+
+    def validate(self, attrs):
+        left_index = attrs.get("dual_left_camera_index")
+        right_index = attrs.get("dual_right_camera_index")
+        if left_index is not None and right_index is not None and left_index == right_index:
+            raise serializers.ValidationError("dual_left_camera_index 和 dual_right_camera_index 不能相同。")
+        return attrs
+
+
+class CameraCaptureSerializer(serializers.Serializer):
+    camera_indices = serializers.ListField(
+        child=serializers.IntegerField(min_value=0),
+        required=False,
+        allow_empty=False,
+    )
+    capture_mode = serializers.ChoiceField(choices=["auto", "single", "dual"], required=False, default="auto")
+    left_camera_index = serializers.IntegerField(required=False, min_value=0)
+    right_camera_index = serializers.IntegerField(required=False, min_value=0)
+    backend = serializers.CharField(required=False, allow_blank=False)
+
+    def validate(self, attrs):
+        if attrs.get("capture_mode") == "dual":
+            left_index = attrs.get("left_camera_index")
+            right_index = attrs.get("right_camera_index")
+            if left_index is not None and right_index is not None and left_index == right_index:
+                raise serializers.ValidationError("双摄拍照时 left_camera_index 和 right_camera_index 不能相同。")
+        return attrs
+
+
+class CameraCaptureDownloadSerializer(serializers.Serializer):
+    record_ids = serializers.ListField(child=serializers.CharField(), allow_empty=False)
+
+
+class RealtimeCurrentFrameDetectSerializer(serializers.Serializer):
+    mode = serializers.ChoiceField(choices=["single", "dual"])
+    camera_index = serializers.IntegerField(required=False, min_value=0)
+    left_camera_index = serializers.IntegerField(required=False, min_value=0)
+    right_camera_index = serializers.IntegerField(required=False, min_value=0)
+    conf = serializers.FloatField(required=False, min_value=0.01, max_value=1.0, default=0.25)
+    detect_classification = serializers.BooleanField(required=False, default=True)
+    detect_ripeness = serializers.BooleanField(required=False, default=False)
+    backend = serializers.CharField(required=False, allow_blank=False)
+
+    def validate(self, attrs):
+        mode = attrs.get("mode")
+        if attrs.get("detect_ripeness") and not attrs.get("detect_classification"):
+            attrs["detect_classification"] = True
+        if mode == "dual":
+            left_index = attrs.get("left_camera_index")
+            right_index = attrs.get("right_camera_index")
+            if left_index is not None and right_index is not None and left_index == right_index:
+                raise serializers.ValidationError("双摄实时检测时左右相机不能相同。")
+        return attrs
 
 
 class MeasurePointSerializer(serializers.Serializer):

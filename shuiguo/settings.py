@@ -167,7 +167,7 @@ CAMERA_CONFIG = {
     "frame_height": int(os.environ["STEREO_CAMERA_HEIGHT"]) if os.environ.get("STEREO_CAMERA_HEIGHT") else None,
     "fps": int(os.environ["STEREO_CAMERA_FPS"]) if os.environ.get("STEREO_CAMERA_FPS") else None,
     "split_mode": os.environ.get("STEREO_CAMERA_SPLIT_MODE", "left_right"),
-    "backend": os.environ.get("STEREO_CAMERA_BACKEND", "CAP_DSHOW" if os.name == "nt" else ""),
+    "backend": os.environ.get("STEREO_CAMERA_BACKEND", ""),
 }
 
 CSRF_TRUSTED_ORIGINS = [
@@ -198,5 +198,7 @@ REST_FRAMEWORK = {
     "PAGE_SIZE_QUERY_PARAM": "page_size",
     "MAX_PAGE_SIZE": 100,
 }
+
+TEST_RUNNER = "fruit_api.test_runner.CompatibleDiscoverRunner"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"

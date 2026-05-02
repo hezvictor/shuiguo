@@ -20,6 +20,7 @@ urlpatterns = [
         include(
             [
                 # User
+                path('csrf/', views.csrf_cookie_view, name='api_csrf_cookie'),
                 path('register/', views.register_view, name='api_register'),
                 path('login/', views.api_login_view, name='api_login'),
                 path('logout/', views.api_logout_view, name='api_logout'),
@@ -33,6 +34,7 @@ urlpatterns = [
                 path('predict_ripeness_by_type/', views.predict_ripeness_by_type, name='predict_ripeness_by_type'),
 
                 # YOLO detection / report
+                path('image-detection/tasks/', views.create_image_detection_task_view, name='image_detection_tasks'),
                 path('yolo_detect/', views.yolo_detect_with_boxes, name='yolo_detect'),
                 path('yolo_detect_info/', views.yolo_detect_info, name='yolo_detect_info'),
                 path('yolo_report/', views.yolo_report, name='yolo_report'),
@@ -45,13 +47,20 @@ urlpatterns = [
 
                 # Stereo camera
                 path('camera/status/', views.camera_status, name='camera_status'),
+                path('camera/registry/', views.camera_registry_get, name='camera_registry_get'),
+                path('camera/registry/scan/', views.camera_registry_scan, name='camera_registry_scan'),
+                path('camera/registry/select/', views.camera_registry_select, name='camera_registry_select'),
                 path('camera/probe/', views.camera_probe, name='camera_probe'),
+                path('camera/device-frame/<int:camera_index>/', views.camera_device_frame, name='camera_device_frame'),
                 path('camera/calibration/status/', views.camera_calibration_status, name='camera_calibration_status'),
                 path('camera/calibration/capture/', views.camera_calibration_capture, name='camera_calibration_capture'),
                 path('camera/calibration/run/', views.camera_calibration_run, name='camera_calibration_run'),
                 path('camera/start/', views.camera_start, name='camera_start'),
                 path('camera/stop/', views.camera_stop, name='camera_stop'),
                 path('camera/stream/', views.camera_stream, name='camera_stream'),
+                path('camera/capture/', views.camera_capture, name='camera_capture'),
+                path('camera/captures/', views.camera_capture_list, name='camera_capture_list'),
+                path('camera/captures/download/', views.camera_capture_download, name='camera_capture_download'),
                 path('camera/measure/', views.camera_measure_current, name='camera_measure_current'),
                 path('measure/runtime-status/', views.measure_runtime_status, name='measure_runtime_status'),
 
@@ -72,6 +81,7 @@ urlpatterns = [
                 path('detection/history/<int:pk>/', views.DetectionHistoryDetailView.as_view(), name='detection_history_detail'),
 
                 # Realtime report save
+                path('realtime/detect/current-frame/', views.realtime_detect_current_frame, name='realtime_detect_current_frame'),
                 path('realtime/save_report/', views.save_realtime_report, name='save_realtime_report'),
             ]
         ),

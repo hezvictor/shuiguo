@@ -1,7 +1,9 @@
 ﻿import base64
 import io
 import os
+import shutil
 import tempfile
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone as dt_timezone
 from types import SimpleNamespace
@@ -18,6 +20,8 @@ from rest_framework.test import APITestCase
 
 from fruit_api.models import DetectionHistory, VideoProcessingTask
 from fruit_api.services.detection.detect_service import InvalidParamError, parse_selected_indices
+from fruit_api.services.detection.image_batch_service import create_image_detection_task
+from fruit_api.services.detection.upload_resolver_service import UploadResolveError, resolve_image_detection_inputs
 from fruit_api.services.video.video_service import (
     VideoTaskStateError,
     create_video_task,
@@ -37,6 +41,11 @@ class ErrorPayloadAssertMixin:
 class AuthApiTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='auth_user', password='pass1234', email='u@test.com')
+
+    def test_csrf_cookie_endpoint_sets_cookie(self):
+        resp = self.client.get('/api/csrf/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertIn('csrftoken', resp.cookies)
 
     def test_register_success(self):
         resp = self.client.post('/api/register/', {'username': 'new_user', 'password': 'pass1234', 'email': 'a@b.com'})
@@ -93,18 +102,34 @@ class DetectionHistoryApiTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
     def test_history_delete_also_removes_report_file(self):
-        with tempfile.TemporaryDirectory() as td:
+        td = os.path.join(settings.BASE_DIR, 'media', 'test_history_delete')
+        shutil.rmtree(td, ignore_errors=True)
+        os.makedirs(td, exist_ok=True)
+        try:
             rel = 'reports/test_report.json'
             abs_path = os.path.join(td, rel)
+            cover_rel = 'image_tasks/task-1/cover.jpg'
+            cover_abs = os.path.join(td, cover_rel)
+            artifact_rel = 'image_tasks/task-1/report.xlsx'
+            artifact_abs = os.path.join(td, artifact_rel)
+            task_root_rel = 'image_tasks/task-1'
             os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+            os.makedirs(os.path.dirname(cover_abs), exist_ok=True)
             with open(abs_path, 'w', encoding='utf-8') as f:
                 f.write('{}')
+            with open(cover_abs, 'wb') as f:
+                f.write(b'cover')
+            with open(artifact_abs, 'wb') as f:
+                f.write(b'artifact')
 
             row = DetectionHistory.objects.create(
                 user=self.user,
                 detection_type='image',
                 summary={'x': 1},
+                cover_image=cover_rel,
                 report_file=rel,
+                artifacts={'excel_report': artifact_rel},
+                detail_data={'task_root': task_root_rel},
             )
 
             with override_settings(MEDIA_ROOT=td):
@@ -112,6 +137,345 @@ class DetectionHistoryApiTests(APITestCase):
 
             self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
             self.assertFalse(os.path.exists(abs_path))
+            self.assertFalse(os.path.exists(cover_abs))
+            self.assertFalse(os.path.exists(artifact_abs))
+            self.assertFalse(os.path.exists(os.path.join(td, task_root_rel)))
+        finally:
+            shutil.rmtree(td, ignore_errors=True)
+
+
+class ImageDetectionTaskApiTests(APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='image_task_user', password='pass1234')
+        self.client.force_authenticate(user=self.user)
+
+    def _image_file(self, name, color=(120, 160, 200)):
+        buffer = io.BytesIO()
+        Image.new('RGB', (16, 16), color=color).save(buffer, format='PNG')
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type='image/png')
+
+    def _zip_file(self, name, files):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            for path, content in files.items():
+                archive.writestr(path, content)
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type='application/zip')
+
+    @patch('fruit_api.views_modules.detect_views.create_image_detection_task')
+    @patch('fruit_api.views_modules.detect_views.apps.get_app_config')
+    def test_create_image_detection_task_success(self, mock_get_app_config, mock_create_task):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+
+        history = DetectionHistory(
+            id=99,
+            user=self.user,
+            detection_type='image',
+            title='图片检测任务',
+            status='completed',
+            input_count=2,
+            summary={'total_targets': 3},
+            detail_data={'items': []},
+            artifacts={'excel_report': 'image_tasks/task-1/report.xlsx'},
+            cover_image='image_tasks/task-1/cover.jpg',
+            report_file='image_tasks/task-1/report.xlsx',
+        )
+        mock_create_task.return_value = history
+
+        resp = self.client.post(
+            '/api/image-detection/tasks/',
+            {
+                'detect_ripeness': 'true',
+                'single_inputs': [self._image_file('normal.png')],
+                'diameter_inputs': [self._image_file('apple_left.png'), self._image_file('apple_right.png')],
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data['history_id'], 99)
+        self.assertEqual(resp.data['task_status'], 'completed')
+        self.assertEqual(resp.data['report_file'], 'image_tasks/task-1/report.xlsx')
+        mock_create_task.assert_called_once()
+
+    def test_create_image_detection_task_requires_inputs(self):
+        resp = self.client.post(
+            '/api/image-detection/tasks/',
+            {
+                'detect_ripeness': 'false',
+            },
+            format='multipart',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['status'], 'error')
+
+    @patch('fruit_api.views_modules.detect_views.create_image_detection_task')
+    @patch('fruit_api.views_modules.detect_views.apps.get_app_config')
+    def test_create_image_detection_task_supports_zip_inputs(self, mock_get_app_config, mock_create_task):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+
+        history = DetectionHistory(
+            id=100,
+            user=self.user,
+            detection_type='image',
+            title='图片检测任务',
+            status='completed',
+            input_count=3,
+            summary={'total_targets': 3},
+            detail_data={'items': []},
+            artifacts={'excel_report': 'image_tasks/task-zip/report.xlsx'},
+            cover_image='image_tasks/task-zip/cover.jpg',
+            report_file='image_tasks/task-zip/report.xlsx',
+        )
+        mock_create_task.return_value = history
+
+        single_buffer = io.BytesIO()
+        Image.new('RGB', (16, 16), color=(123, 100, 90)).save(single_buffer, format='PNG')
+        single_content = single_buffer.getvalue()
+
+        diameter_left = io.BytesIO()
+        Image.new('RGB', (16, 16), color=(0, 255, 0)).save(diameter_left, format='PNG')
+        diameter_right = io.BytesIO()
+        Image.new('RGB', (16, 16), color=(0, 0, 255)).save(diameter_right, format='PNG')
+
+        resp = self.client.post(
+            '/api/image-detection/tasks/',
+            {
+                'detect_ripeness': 'true',
+                'single_inputs': [
+                    self._zip_file(
+                        'single_batch.zip',
+                        {
+                            'single_batch/a.png': single_content,
+                            'single_batch/sub/b.png': single_content,
+                        },
+                    )
+                ],
+                'diameter_inputs': [
+                    self._zip_file(
+                        'diameter_batch.zip',
+                        {
+                            'diameter_batch/group1/apple_left.png': diameter_left.getvalue(),
+                            'diameter_batch/group1/apple_right.png': diameter_right.getvalue(),
+                        },
+                    )
+                ],
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        mock_create_task.assert_called_once()
+        kwargs = mock_create_task.call_args.kwargs
+        self.assertEqual(len(kwargs['standard_images']), 2)
+        self.assertEqual(len(kwargs['diameter_groups']), 1)
+        self.assertTrue(kwargs['options']['detect_ripeness'])
+        self.assertTrue(kwargs['options']['detect_diameter'])
+
+    def test_create_image_detection_task_rejects_direct_diameter_file_without_side_name(self):
+        resp = self.client.post(
+            '/api/image-detection/tasks/',
+            {
+                'diameter_inputs': [self._image_file('apple.png')],
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['status'], 'error')
+        self.assertIn('left', resp.data['error'].lower())
+
+    def test_create_image_detection_task_rejects_invalid_diameter_zip_structure(self):
+        image_content = self._image_file('tmp.png').read()
+        resp = self.client.post(
+            '/api/image-detection/tasks/',
+            {
+                'diameter_inputs': [
+                    self._zip_file(
+                        'bad_diameter.zip',
+                        {
+                            'bad_diameter/apple_left.png': image_content,
+                            'bad_diameter/apple_right.png': image_content,
+                        },
+                    )
+                ],
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['status'], 'error')
+        self.assertIn('一级目录', resp.data['error'])
+
+    def test_create_image_detection_task_rejects_diameter_zip_missing_right_image(self):
+        image_content = self._image_file('tmp.png').read()
+        resp = self.client.post(
+            '/api/image-detection/tasks/',
+            {
+                'diameter_inputs': [
+                    self._zip_file(
+                        'missing_right.zip',
+                        {
+                            'missing_right/group1/apple_left.png': image_content,
+                            'missing_right/group1/readme.txt': b'ignore',
+                        },
+                    )
+                ],
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(resp.data['status'], 'error')
+        self.assertIn('只能包含图片文件', resp.data['error'])
+
+    def test_create_image_detection_task_service_supports_standard_image_without_diameter(self):
+        media_root = os.path.join(settings.BASE_DIR, 'media', 'test_image_task_service')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            with override_settings(MEDIA_ROOT=media_root):
+                with patch(
+                    'fruit_api.services.detection.image_batch_service.yolo_targets',
+                    return_value=[{'bbox': [1, 1, 12, 12], 'label': 'fruit', 'confidence': 0.91}],
+                ), patch(
+                    'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
+                    return_value={'predicted_class': 'apple', 'confidence': 0.87},
+                ), patch(
+                    'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
+                    return_value={'predicted_class': 'ripe', 'confidence': 0.74},
+                ):
+                    history = create_image_detection_task(
+                        user=self.user,
+                        standard_images=[
+                            {
+                                'display_name': 'single.png',
+                                'file_name': 'single.png',
+                                'content': self._image_file('single.png').read(),
+                                'input_source': 'direct_upload',
+                                'archive_name': None,
+                                'archive_path': None,
+                            }
+                        ],
+                        diameter_groups=[],
+                        options={
+                            'detect_classification': True,
+                            'detect_ripeness': True,
+                            'detect_diameter': False,
+                        },
+                        app_config=Mock(),
+                    )
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+        self.assertEqual(history.status, 'completed')
+        self.assertEqual(history.summary['total_targets'], 1)
+        self.assertTrue(history.report_file.endswith('.xlsx'))
+        self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter'], None)
+
+    @patch('fruit_api.views_modules.detect_views.apps.get_app_config')
+    def test_create_image_detection_task_zip_inputs_end_to_end(self, mock_get_app_config):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_app_cfg.yolo_model = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+
+        measure_service = Mock()
+        measure_service.run_full_measurement.return_value = {
+            'status': 'success',
+            'message': '果径测量完成',
+            'measurement': {
+                'targets': [
+                    {
+                        'label': 'fruit',
+                        'confidence': 0.95,
+                        'bbox': [1, 1, 10, 10],
+                        'distance': 66.2,
+                        'distance_unit': 'mm',
+                        'distance_mm': 66.2,
+                        'point1': {'x': 1, 'y': 5},
+                        'point2': {'x': 10, 'y': 5},
+                        'status': 'ok',
+                    }
+                ],
+                'result_json_path': None,
+                'csv_path': None,
+            },
+            'inference': {'rectified_left_path': None},
+            'targets': [
+                {
+                    'label': 'fruit',
+                    'confidence': 0.95,
+                    'bbox': [1, 1, 10, 10],
+                    'distance': 66.2,
+                    'distance_unit': 'mm',
+                    'distance_mm': 66.2,
+                    'point1': {'x': 1, 'y': 5},
+                    'point2': {'x': 10, 'y': 5},
+                    'status': 'ok',
+                }
+            ],
+            'total_targets': 1,
+            'valid_measurements': 1,
+            'statistics': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+            'visualization_file': None,
+        }
+
+        media_root = os.path.join(settings.BASE_DIR, 'media', 'test_image_task_api_e2e')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            with override_settings(MEDIA_ROOT=media_root):
+                with patch(
+                    'fruit_api.services.detection.image_batch_service.yolo_targets',
+                    return_value=[{'bbox': [1, 1, 12, 12], 'label': 'fruit', 'confidence': 0.91}],
+                ), patch(
+                    'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
+                    return_value={'predicted_class': 'apple', 'confidence': 0.87},
+                ), patch(
+                    'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
+                    return_value={'predicted_class': 'ripe', 'confidence': 0.74},
+                ), patch(
+                    'fruit_api.services.detection.image_batch_service.get_diameter_service',
+                    return_value=measure_service,
+                ):
+                    image_content = self._image_file('tmp.png').read()
+                    resp = self.client.post(
+                        '/api/image-detection/tasks/',
+                        {
+                            'detect_ripeness': 'true',
+                            'single_inputs': [
+                                self._zip_file(
+                                    'single_batch.zip',
+                                    {
+                                        'single_batch/a.png': image_content,
+                                    },
+                                )
+                            ],
+                            'diameter_inputs': [
+                                self._zip_file(
+                                    'diameter_batch.zip',
+                                    {
+                                        'diameter_batch/group1/apple_left.png': image_content,
+                                        'diameter_batch/group1/apple_right.png': image_content,
+                                    },
+                                )
+                            ],
+                        },
+                        format='multipart',
+                    )
+
+            self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+            history = DetectionHistory.objects.get(id=resp.data['history_id'])
+            self.assertEqual(history.status, 'completed')
+            self.assertEqual(history.input_count, 2)
+            self.assertEqual(len(history.detail_data['items']), 2)
+            self.assertTrue(history.report_file.endswith('.xlsx'))
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
 
 
 class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
@@ -425,6 +789,208 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data['status'], 'success')
         mock_measure_and_save_history.assert_called_once()
+
+    @patch('fruit_api.views_modules.camera_views.create_image_detection_task_from_camera_measurement')
+    @patch('fruit_api.views_modules.camera_views.measure_and_save_history')
+    @patch('fruit_api.views_modules.camera_views.apps.get_app_config')
+    @patch('fruit_api.views_modules.camera_views.get_stereo_camera_service')
+    def test_camera_measure_current_can_link_image_task(
+        self,
+        mock_get_service,
+        mock_get_app_config,
+        mock_measure_and_save_history,
+        mock_create_image_task,
+    ):
+        mock_get_service.return_value.read_stereo_frames.return_value = (
+            np.zeros((8, 8, 3), dtype=np.uint8),
+            np.zeros((8, 8, 3), dtype=np.uint8),
+            {'active': True},
+        )
+
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_app_cfg.yolo_model = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+
+        mock_measure_and_save_history.return_value = {
+            'status': 'success',
+            'message': '果径测量完成',
+            'targets': [],
+            'total_targets': 0,
+            'valid_measurements': 0,
+            'statistics': {},
+            'visualization_url': None,
+            'visualization_file': None,
+            'measurement': {'inference_id': 'camera-infer-2'},
+            'inference': {'rectified_left_path': None},
+        }
+        mock_create_image_task.return_value = DetectionHistory(
+            id=123,
+            user=self.user,
+            detection_type='image',
+            title='双目实时检测任务',
+            report_file='image_tasks/camera/report.xlsx',
+            cover_image='image_tasks/camera/cover.png',
+        )
+
+        resp = self.client.post(
+            '/api/camera/measure/',
+            {
+                'conf': 0.25,
+                'save_vis': True,
+                'save_as_image_task': True,
+                'detect_classification': True,
+                'detect_ripeness': False,
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['linked_image_history']['id'], 123)
+        mock_create_image_task.assert_called_once()
+
+    @patch('fruit_api.views_modules.camera_registry_views.get_camera_registry_service')
+    def test_camera_registry_get_success(self, mock_get_registry_service):
+        mock_get_registry_service.return_value.snapshot.return_value = {
+            'selection': {'single_camera_index': 0},
+            'last_scan': {'results': []},
+            'suggested_intervals': {'single_interval_ms': 1500, 'dual_interval_ms': 5000},
+        }
+
+        resp = self.client.get('/api/camera/registry/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['selection']['single_camera_index'], 0)
+
+    @patch('fruit_api.views_modules.camera_registry_views.get_camera_registry_service')
+    @patch('fruit_api.views_modules.camera_registry_views.probe_camera_indices')
+    def test_camera_registry_scan_success(self, mock_probe_camera_indices, mock_get_registry_service):
+        mock_probe_camera_indices.return_value = {
+            'backend': 'CAP_DSHOW',
+            'max_index': 8,
+            'results': [{'camera_index': 0, 'opened': True}],
+            'pair_results': [],
+            'device_catalog': [],
+            'opened_count': 1,
+            'recommended_dual_pair': None,
+        }
+        mock_get_registry_service.return_value.update_scan.return_value = {
+            'selection': {'single_camera_index': 0},
+            'last_scan': {'results': [{'camera_index': 0, 'opened': True}]},
+            'suggested_intervals': {'single_interval_ms': 1500, 'dual_interval_ms': 5000},
+        }
+
+        resp = self.client.post('/api/camera/registry/scan/', {'max_index': 8}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['selection']['single_camera_index'], 0)
+        mock_probe_camera_indices.assert_called_once()
+
+    @patch('fruit_api.views_modules.camera_registry_views.get_camera_registry_service')
+    def test_camera_registry_select_success(self, mock_get_registry_service):
+        mock_get_registry_service.return_value.update_selection.return_value = {
+            'selection': {
+                'single_camera_index': 1,
+                'dual_left_camera_index': 1,
+                'dual_right_camera_index': 2,
+                'preview_camera_indices': [1, 2],
+            },
+            'last_scan': {'results': []},
+            'suggested_intervals': {'single_interval_ms': 1500, 'dual_interval_ms': 5000},
+        }
+
+        resp = self.client.post(
+            '/api/camera/registry/select/',
+            {
+                'single_camera_index': 1,
+                'dual_left_camera_index': 1,
+                'dual_right_camera_index': 2,
+                'preview_camera_indices': [1, 2],
+            },
+            format='json',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['selection']['preview_camera_indices'], [1, 2])
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_success(self, mock_get_capture_service):
+        mock_get_capture_service.return_value.capture.return_value = [
+            {
+                'id': 'cap-1',
+                'capture_mode': 'single',
+                'files': [{'file_url': '/media/camera_captures/single/test.jpg'}],
+            }
+        ]
+
+        resp = self.client.post('/api/camera/capture/', {'camera_indices': [0]}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(resp.data['records'][0]['id'], 'cap-1')
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_download_returns_zip(self, mock_get_capture_service):
+        mock_get_capture_service.return_value.build_zip_bytes.return_value = {
+            'file_name': 'captures.zip',
+            'content': b'zip-content',
+            'record_count': 2,
+        }
+
+        resp = self.client.post('/api/camera/captures/download/', {'record_ids': ['a', 'b']}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp['Content-Type'], 'application/zip')
+
+
+class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
+    def setUp(self):
+        self.user = User.objects.create_user(username='realtime_rt_user', password='pass1234')
+        self.client.force_authenticate(user=self.user)
+
+    @patch('fruit_api.views_modules.realtime_runtime_views.run_single_camera_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_single_success(self, mock_get_app_config, mock_run_single):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_run_single.return_value = {
+            'status': 'success',
+            'mode': 'single',
+            'camera_index': 0,
+            'targets': [],
+            'summary': {'total_targets': 0, 'fruit_counts': {}, 'ripeness_counts': {}},
+            'annotated_image_url': '/media/realtime_frames/one.jpg',
+            'suggested_interval_ms': 1500,
+        }
+
+        resp = self.client.post('/api/realtime/detect/current-frame/', {'mode': 'single'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['mode'], 'single')
+        mock_run_single.assert_called_once()
+
+    @patch('fruit_api.views_modules.realtime_runtime_views.run_dual_camera_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_dual_success(self, mock_get_app_config, mock_run_dual):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_run_dual.return_value = {
+            'status': 'success',
+            'mode': 'dual',
+            'left_camera_index': 1,
+            'right_camera_index': 2,
+            'targets': [],
+            'summary': {'total_targets': 0, 'valid_measurements': 0, 'fruit_counts': {}, 'ripeness_counts': {}, 'statistics': {}},
+            'annotated_image_url': '/media/diameter_tmp/dual.jpg',
+            'suggested_interval_ms': 5000,
+        }
+
+        resp = self.client.post('/api/realtime/detect/current-frame/', {'mode': 'dual'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['mode'], 'dual')
+        mock_run_dual.assert_called_once()
 
 
 class VideoApiTests(ErrorPayloadAssertMixin, APITestCase):
@@ -754,6 +1320,21 @@ class VideoServiceAdvancedTests(APITestCase):
 
 
 class ServiceUnitTests(SimpleTestCase):
+    def _image_bytes(self, color=(120, 160, 200)):
+        buffer = io.BytesIO()
+        Image.new('RGB', (8, 8), color=color).save(buffer, format='PNG')
+        return buffer.getvalue()
+
+    def _upload(self, name, content, content_type='image/png'):
+        return SimpleUploadedFile(name, content, content_type=content_type)
+
+    def _zip_upload(self, name, files):
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, 'w') as archive:
+            for path, content in files.items():
+                archive.writestr(path, content)
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type='application/zip')
+
     def test_parse_selected_indices_none(self):
         self.assertIsNone(parse_selected_indices(None))
 
@@ -820,10 +1401,120 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertEqual(opened[1]['device_name'], 'USB 2.0 Camera B')
         self.assertEqual(payload['pair_results'][0]['left_device_name'], 'USB 2.0 Camera A')
 
+    @patch('fruit_api.services.camera.stereo_camera_service._list_windows_camera_devices')
+    @patch('fruit_api.services.camera.stereo_camera_service._require_cv2')
+    def test_probe_camera_indices_avoids_pairwise_camera_reopen(self, mock_require_cv2, mock_list_devices):
+        constructed = []
+
+        class FakeCapture:
+            def __init__(self, index, backend):
+                self.index = index
+                self.backend = backend
+                constructed.append((index, backend))
+
+            def isOpened(self):
+                return self.index in {0, 1, 2}
+
+            def read(self):
+                return True, np.ones((480, 640, 3), dtype=np.uint8)
+
+            def get(self, _prop):
+                return 30.0
+
+            def set(self, *_args):
+                return True
+
+            def release(self):
+                return None
+
+        mock_require_cv2.return_value = SimpleNamespace(
+            CAP_ANY=0,
+            CAP_MSMF=1,
+            CAP_DSHOW=2,
+            CAP_PROP_FPS=5,
+            CAP_PROP_FRAME_WIDTH=3,
+            CAP_PROP_FRAME_HEIGHT=4,
+            CAP_PROP_BUFFERSIZE=38,
+            VideoCapture=lambda index, backend: FakeCapture(index, backend),
+        )
+        mock_list_devices.return_value = []
+
+        from fruit_api.services.camera.stereo_camera_service import probe_camera_indices
+
+        payload = probe_camera_indices(max_index=3, backend='CAP_ANY')
+
+        self.assertEqual(len(constructed), 3)
+        self.assertEqual(len(payload['pair_results']), 3)
+        self.assertTrue(all(item['validation_mode'] == 'individual_probe' for item in payload['pair_results']))
+
     def test_validate_completed_task_raises_for_processing(self):
         task = SimpleNamespace(status='processing')
         with self.assertRaises(VideoTaskStateError):
             validate_completed_task(task)
+
+    def test_resolve_image_detection_inputs_pairs_multiple_direct_diameter_groups(self):
+        image_bytes = self._image_bytes()
+        singles, groups = resolve_image_detection_inputs(
+            single_inputs=[self._upload('single.png', image_bytes)],
+            diameter_inputs=[
+                self._upload('apple_left.png', image_bytes),
+                self._upload('apple_right.png', image_bytes),
+                self._upload('banana-left.png', image_bytes),
+                self._upload('banana-right.png', image_bytes),
+            ],
+        )
+
+        self.assertEqual(len(singles), 1)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]['input_source'], 'direct_upload')
+        self.assertEqual(groups[0]['label'], 'apple')
+        self.assertEqual(groups[1]['label'], 'banana')
+
+    def test_resolve_image_detection_inputs_supports_single_zip_and_diameter_zip(self):
+        image_bytes = self._image_bytes()
+        singles, groups = resolve_image_detection_inputs(
+            single_inputs=[
+                self._zip_upload(
+                    'single.zip',
+                    {
+                        'single/a.png': image_bytes,
+                        'single/sub/b.png': image_bytes,
+                        '__MACOSX/ignored.png': image_bytes,
+                    },
+                )
+            ],
+            diameter_inputs=[
+                self._zip_upload(
+                    'diameter.zip',
+                    {
+                        'diameter/group1/apple_left.png': image_bytes,
+                        'diameter/group1/apple_right.png': image_bytes,
+                        'diameter/group2/banana_left.png': image_bytes,
+                        'diameter/group2/banana_right.png': image_bytes,
+                    },
+                )
+            ],
+        )
+
+        self.assertEqual(len(singles), 2)
+        self.assertTrue(all(item['input_source'] == 'zip_archive' for item in singles))
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]['archive_name'], 'diameter.zip')
+
+    def test_resolve_image_detection_inputs_rejects_illegal_archive_path(self):
+        image_bytes = self._image_bytes()
+        with self.assertRaises(UploadResolveError):
+            resolve_image_detection_inputs(
+                single_inputs=[
+                    self._zip_upload(
+                        'single.zip',
+                        {
+                            '../escape.png': image_bytes,
+                        },
+                    )
+                ],
+                diameter_inputs=[],
+            )
 
 
 

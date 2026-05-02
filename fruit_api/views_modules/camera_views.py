@@ -1,7 +1,7 @@
 from django.apps import apps
 from django.conf import settings
 from django.contrib.auth.decorators import login_required
-from django.http import JsonResponse, StreamingHttpResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from django.shortcuts import render
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -19,6 +19,8 @@ from fruit_api.services.camera import (
     CalibrationStateError,
     StereoCalibrationConfig,
     StereoCameraConfig,
+    capture_single_camera_frame,
+    get_camera_registry_service,
     get_stereo_calibration_service,
     get_stereo_camera_service,
     get_stereo_preview_manager,
@@ -32,6 +34,7 @@ from fruit_api.services.detection.diameter_app_service import (
     measure_and_save_history,
     reset_diameter_service,
 )
+from fruit_api.services.detection.image_batch_service import create_image_detection_task_from_camera_measurement
 from fruit_api.views_modules.response_utils import error_response, serializer_error_response
 
 
@@ -87,6 +90,7 @@ def camera_status(request):
     payload["stream_url"] = _camera_stream_url()
     payload["preview_ws_path"] = _camera_preview_ws_path()
     payload["debug_url"] = _camera_debug_url()
+    payload["registry"] = get_camera_registry_service().snapshot()
     return Response(payload, status=status.HTTP_200_OK)
 
 
@@ -99,6 +103,7 @@ def camera_probe(request):
             raise ValueError("max_index must be between 1 and 16")
         backend = request.GET.get("backend") or None
         payload = probe_camera_indices(max_index=max_index, backend=backend)
+        payload["registry"] = get_camera_registry_service().update_scan(payload)
         return Response(payload, status=status.HTTP_200_OK)
     except ValueError as exc:
         return error_response(exc)
@@ -246,6 +251,28 @@ def camera_measure_current(request):
             conf=serializer.validated_data.get("conf", 0.25),
             save_vis=serializer.validated_data.get("save_vis", True),
         )
+        if serializer.validated_data.get("save_as_image_task", False):
+            app_config = apps.get_app_config("fruit_api")
+            app_config.ensure_models_loaded()
+            image_history = create_image_detection_task_from_camera_measurement(
+                user=request.user,
+                left_frame=left_frame,
+                right_frame=right_frame,
+                payload=payload,
+                options={
+                    "detect_classification": serializer.validated_data.get("detect_classification", True),
+                    "detect_ripeness": serializer.validated_data.get("detect_ripeness", False),
+                },
+                app_config=app_config,
+            )
+            payload["linked_image_history"] = {
+                "id": image_history.id,
+                "title": image_history.title,
+                "report_file": image_history.report_file,
+                "cover_image": image_history.cover_image,
+                "report_url": f"{settings.MEDIA_URL.rstrip('/')}/{image_history.report_file}" if image_history.report_file else None,
+                "cover_image_url": f"{settings.MEDIA_URL.rstrip('/')}/{image_history.cover_image}" if image_history.cover_image else None,
+            }
     except (CameraDependencyError, CameraOpenError, CameraStateError) as exc:
         return error_response(exc, http_status=status.HTTP_500_INTERNAL_SERVER_ERROR)
     except DiameterDependencyError as exc:
@@ -260,6 +287,28 @@ def camera_measure_current(request):
     return Response(payload, status=status.HTTP_200_OK)
 
 
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def camera_device_frame(request, camera_index: int):
+    try:
+        frame = capture_single_camera_frame(
+            int(camera_index),
+            backend=request.GET.get("backend") or get_camera_registry_service().snapshot()["selection"].get("backend"),
+        )
+        import cv2
+
+        ok, encoded = cv2.imencode(".jpg", frame, [int(cv2.IMWRITE_JPEG_QUALITY), 80])
+        if not ok:
+            raise RuntimeError("failed to encode camera frame")
+        response = HttpResponse(encoded.tobytes(), content_type="image/jpeg")
+        response["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response["Pragma"] = "no-cache"
+        response["Expires"] = "0"
+        return response
+    except (CameraDependencyError, CameraOpenError, CameraStateError, RuntimeError) as exc:
+        return error_response(exc, http_status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+
 __all__ = [
     "camera_debug_page",
     "camera_calibration_capture",
@@ -271,5 +320,6 @@ __all__ = [
     "camera_status",
     "camera_stop",
     "camera_stream",
+    "camera_device_frame",
     "measure_runtime_status",
 ]
