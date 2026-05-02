@@ -148,37 +148,54 @@
             <div v-else-if="visibleRecords.length" class="result-list">
               <article v-for="record in visibleRecords" :key="record.id" class="result-card">
                 <button class="remove-btn" @click="dismissRecord(record.id)">×</button>
-                <img
-                  v-if="resolveRecordCover(record)"
-                  :src="resolveRecordCover(record)"
-                  :alt="record.title"
-                  class="result-cover"
-                />
-                <div class="result-copy">
-                  <strong>{{ compactTitle(record) }}</strong>
-                  <div class="result-tags">
-                    <span class="result-tag">{{ sourceLabel(record) }}</span>
-                    <span
-                      v-for="tag in operationTags(record)"
-                      :key="`${record.id}-${tag}`"
-                      class="result-tag result-tag--accent"
-                    >
-                      {{ tag }}
-                    </span>
+                <div class="result-main">
+                  <div class="result-copy">
+                    <strong>{{ compactTitle(record) }}</strong>
+                    <div class="result-tags">
+                      <span class="result-tag">{{ sourceLabel(record) }}</span>
+                      <span
+                        v-for="tag in operationTags(record)"
+                        :key="`${record.id}-${tag}`"
+                        class="result-tag result-tag--accent"
+                      >
+                        {{ tag }}
+                      </span>
+                    </div>
+                    <span>{{ formatDateTime(record.created_at) }}</span>
+                    <span>{{ compactSummary(record) }}</span>
                   </div>
-                  <span>{{ formatDateTime(record.created_at) }}</span>
-                  <span>{{ compactSummary(record) }}</span>
+                  <div class="result-actions">
+                    <button class="btn btn-secondary btn-mini" @click="viewDetail(record)">查看详情</button>
+                    <button
+                      v-if="record.report_file || record.report_url"
+                      class="btn btn-success btn-mini"
+                      @click="downloadReport(record)"
+                    >
+                      下载报告
+                    </button>
+                    <button class="btn btn-secondary btn-mini" @click="goToHistory">检测历史</button>
+                  </div>
                 </div>
-                <div class="result-actions">
-                  <button class="btn btn-secondary btn-mini" @click="viewDetail(record)">查看详情</button>
-                  <button
-                    v-if="record.report_file || record.report_url"
-                    class="btn btn-success btn-mini"
-                    @click="downloadReport(record)"
-                  >
-                    下载报告
-                  </button>
-                  <button class="btn btn-secondary btn-mini" @click="goToHistory">检测历史</button>
+
+                <div class="result-source-panel">
+                  <span class="result-source-label">输入源</span>
+                  <div v-if="record.source_entries?.length" class="result-source-list">
+                    <template v-for="(entry, index) in record.source_entries" :key="`${record.id}-source-${index}`">
+                      <a
+                        v-if="entry.url"
+                        class="result-source-chip result-source-chip--link"
+                        :href="entry.url"
+                        target="_blank"
+                        rel="noopener"
+                      >
+                        {{ entry.label }}
+                      </a>
+                      <span v-else class="result-source-chip">
+                        {{ entry.label }}
+                      </span>
+                    </template>
+                  </div>
+                  <span v-else class="result-source-empty">暂无输入源名称</span>
                 </div>
               </article>
             </div>
@@ -246,6 +263,10 @@
               </el-table-column>
             </el-table>
           </div>
+
+          <div class="detail-footer">
+            <button class="btn btn-secondary" @click="detailVisible = false">关闭窗口</button>
+          </div>
         </div>
       </el-dialog>
     </div>
@@ -268,7 +289,7 @@ export default {
       singleInputs: [],
       diameterInputs: [],
       options: {
-        detectRipeness: false
+        detectRipeness: true
       },
       submitting: false,
       loadingRecent: false,
@@ -494,7 +515,7 @@ export default {
 
 <style scoped>
 .image-page {
-  padding: 20px;
+  padding: 16px;
   min-height: 100%;
   background:
     radial-gradient(circle at top left, rgba(44, 123, 83, 0.16), transparent 26%),
@@ -502,10 +523,10 @@ export default {
 }
 
 .page-shell {
-  max-width: 1460px;
+  max-width: 1320px;
   margin: 0 auto;
   display: grid;
-  gap: 20px;
+  gap: 16px;
 }
 
 .hero,
@@ -518,9 +539,9 @@ export default {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(320px, 0.8fr);
-  gap: 24px;
-  padding: 28px 30px;
+  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.7fr);
+  gap: 18px;
+  padding: 22px 24px;
   background: linear-gradient(135deg, #173b32 0%, #235042 58%, #3a7a65 100%);
   color: #f6fbf8;
 }
@@ -535,13 +556,14 @@ export default {
 
 .hero h1 {
   margin: 0;
-  font-size: 36px;
+  font-size: 30px;
   line-height: 1.1;
 }
 
 .hero-text {
-  margin: 14px 0 0;
-  line-height: 1.8;
+  margin: 10px 0 0;
+  line-height: 1.65;
+  font-size: 14px;
   color: rgba(246, 251, 248, 0.86);
 }
 
@@ -552,12 +574,13 @@ export default {
 }
 
 .hero-badge {
-  min-height: 42px;
+  min-height: 38px;
   display: flex;
   align-items: center;
-  padding: 0 14px;
+  padding: 0 12px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.12);
+  font-size: 13px;
 }
 
 .error-banner {
@@ -573,15 +596,15 @@ export default {
 
 .workspace-grid {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) 420px;
-  gap: 20px;
+  grid-template-columns: minmax(0, 1.35fr) 360px;
+  gap: 16px;
   align-items: start;
 }
 
 .workspace-main,
 .workspace-side {
   display: grid;
-  gap: 20px;
+  gap: 16px;
 }
 
 .workspace-side {
@@ -590,7 +613,7 @@ export default {
 }
 
 .panel-card {
-  padding: 22px;
+  padding: 18px;
 }
 
 .panel-header {
@@ -598,18 +621,19 @@ export default {
   justify-content: space-between;
   align-items: flex-start;
   gap: 12px;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
 }
 
 .panel-header h2 {
-  margin: 0 0 6px;
-  font-size: 18px;
+  margin: 0 0 4px;
+  font-size: 16px;
   color: #18352b;
 }
 
 .panel-header p {
   margin: 0;
-  line-height: 1.7;
+  line-height: 1.6;
+  font-size: 13px;
   color: #557064;
 }
 
@@ -626,11 +650,12 @@ export default {
   display: flex;
   gap: 10px;
   align-items: center;
-  min-height: 52px;
-  padding: 0 16px;
+  min-height: 46px;
+  padding: 0 14px;
   border-radius: 16px;
   background: #f6faf7;
   color: #18352b;
+  font-size: 14px;
 }
 
 .empty-inline-tip {
@@ -641,7 +666,7 @@ export default {
 .upload-area {
   border: 2px dashed #cdd9d3;
   border-radius: 20px;
-  padding: 42px 20px;
+  padding: 28px 18px;
   text-align: center;
   cursor: pointer;
   transition: all 0.25s ease;
@@ -659,35 +684,35 @@ export default {
 
 .upload-icon {
   display: inline-flex;
-  width: 64px;
-  height: 64px;
+  width: 52px;
+  height: 52px;
   align-items: center;
   justify-content: center;
-  margin-bottom: 16px;
-  border-radius: 20px;
+  margin-bottom: 12px;
+  border-radius: 16px;
   background: #173b32;
   color: #f6fbf8;
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
 }
 
 .upload-text {
   margin: 0 0 8px;
-  font-size: 18px;
+  font-size: 16px;
   font-weight: 600;
 }
 
 .upload-hint {
   margin: 0;
-  font-size: 14px;
+  font-size: 13px;
   color: #7a9086;
 }
 
 .preview-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
-  gap: 14px;
-  margin-top: 18px;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 12px;
+  margin-top: 14px;
 }
 
 .preview-card,
@@ -700,7 +725,7 @@ export default {
 }
 
 .preview-card {
-  padding: 12px;
+  padding: 10px;
 }
 
 .preview-visual {
@@ -730,7 +755,7 @@ export default {
   border-radius: 14px;
   background: linear-gradient(135deg, #173b32 0%, #3a7a65 100%);
   color: #f6fbf8;
-  font-size: 28px;
+  font-size: 24px;
   font-weight: 700;
 }
 
@@ -738,7 +763,6 @@ export default {
 .result-copy {
   display: grid;
   gap: 4px;
-  margin-top: 10px;
 }
 
 .result-tags {
@@ -767,12 +791,13 @@ export default {
 .preview-meta strong,
 .result-copy strong {
   color: #18352b;
+  font-size: 14px;
 }
 
 .preview-meta span,
 .result-copy span {
   color: #6b8579;
-  font-size: 13px;
+  font-size: 12px;
 }
 
 .remove-btn {
@@ -791,11 +816,20 @@ export default {
 
 .result-list {
   display: grid;
-  gap: 14px;
+  gap: 10px;
 }
 
 .result-card {
-  padding: 16px;
+  padding: 14px;
+  display: grid;
+  gap: 12px;
+}
+
+.result-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
 }
 
 .result-actions,
@@ -806,16 +840,65 @@ export default {
 }
 
 .result-actions {
-  margin-top: 14px;
+  justify-content: flex-end;
+}
+
+.result-source-panel {
+  display: grid;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #e4ece7;
+}
+
+.result-source-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: #557064;
+  text-transform: uppercase;
+}
+
+.result-source-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.result-source-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: #eef4f1;
+  color: #355b4d;
+  font-size: 12px;
+  text-decoration: none;
+  max-width: 100%;
+  word-break: break-all;
+}
+
+.result-source-chip--link {
+  background: #e8f1ed;
+  color: #1f6a4d;
+}
+
+.result-source-chip--link:hover {
+  background: #dcece5;
+}
+
+.result-source-empty {
+  font-size: 12px;
+  color: #7a9086;
 }
 
 .btn {
   min-width: 108px;
-  padding: 12px 18px;
+  padding: 10px 16px;
   border: none;
   border-radius: 14px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   transition: transform 0.2s ease, opacity 0.2s ease;
 }
@@ -846,14 +929,19 @@ export default {
 
 .btn-mini {
   min-width: 0;
-  padding: 8px 12px;
-  font-size: 13px;
+  padding: 7px 10px;
+  font-size: 12px;
   border-radius: 12px;
 }
 
 .detail-shell {
   display: grid;
   gap: 20px;
+}
+
+.detail-footer {
+  display: flex;
+  justify-content: flex-end;
 }
 
 .detail-summary p {
@@ -910,17 +998,22 @@ export default {
   }
 
   .hero {
-    padding: 22px 20px;
+    padding: 18px;
   }
 
   .hero h1 {
-    font-size: 30px;
+    font-size: 26px;
   }
 
+  .result-main,
   .action-row,
   .result-actions,
   .panel-header {
     flex-direction: column;
+  }
+
+  .result-actions {
+    justify-content: flex-start;
   }
 }
 </style>

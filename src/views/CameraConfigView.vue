@@ -7,7 +7,7 @@
           <h1>摄像头配置</h1>
           <p class="hero-text">
             先扫描当前设备并同步全局摄像头方案，再选择单摄、双摄和预览设备。预览区域通过 WebSocket
-            直接展示实时画面，不再轮询静态截图。
+            直接展示实时画面，拍照改为先暂存分组，点击保存后再生成 ZIP 结果。
           </p>
         </div>
 
@@ -131,7 +131,7 @@
             <div class="panel-header panel-header--actions">
               <div>
                 <h2>预览与拍照</h2>
-                <p>预览卡片通过独立 WebSocket 连接显示实时画面，拍照测试会临时释放预览后再自动恢复。</p>
+                <p>拍照会先生成待保存分组，不立即写入结果栏。点击保存后，当前分组会打包为 ZIP 并出现在结果区。</p>
               </div>
               <div class="preview-actions">
                 <el-button type="primary" :disabled="!previewCameraIndices.length || previewEnabled" @click="startPreview">
@@ -146,7 +146,16 @@
                   :disabled="!canCapture"
                   @click="captureSelected"
                 >
-                  拍照测试
+                  拍照
+                </el-button>
+                <el-button
+                  type="primary"
+                  plain
+                  :loading="savingPending"
+                  :disabled="!pendingCaptureGroups.length"
+                  @click="savePendingCaptures"
+                >
+                  保存
                 </el-button>
               </div>
             </div>
@@ -161,6 +170,36 @@
               />
             </div>
             <el-empty v-else description="请先在上方勾选要预览的摄像头。" />
+
+            <div class="pending-section">
+              <div class="pending-header">
+                <h3>待保存照片组</h3>
+                <span>{{ pendingCaptureGroups.length }} 组</span>
+              </div>
+
+              <div v-if="pendingCaptureGroups.length" class="pending-list">
+                <article v-for="group in pendingCaptureGroups" :key="group.stage_id" class="pending-item">
+                  <div class="pending-title-row">
+                    <strong>{{ group.displayName }}</strong>
+                    <span>{{ formatDateTime(group.created_at) }}</span>
+                  </div>
+                  <p>{{ group.capture_mode === 'dual' ? '双目照片组' : '单摄照片组' }}</p>
+                  <div class="pending-files">
+                    <a
+                      v-for="fileInfo in group.files"
+                      :key="`${group.stage_id}-${fileInfo.role}`"
+                      class="capture-link"
+                      :href="fileInfo.file_url"
+                      target="_blank"
+                      rel="noopener"
+                    >
+                      {{ fileInfo.role }}: {{ fileInfo.file_name }}
+                    </a>
+                  </div>
+                </article>
+              </div>
+              <el-empty v-else description="暂时还没有待保存的照片组。" />
+            </div>
           </section>
         </div>
 
@@ -169,7 +208,7 @@
             <div class="panel-header">
               <div>
                 <h2>拍照结果</h2>
-                <p>单摄图片支持直接下载，双摄记录支持查看左右图并批量下载 ZIP。</p>
+                <p>保存后的 ZIP 压缩包会出现在这里，可直接下载，也支持勾选后批量下载。</p>
               </div>
             </div>
 
@@ -190,21 +229,22 @@
               <article v-for="record in captureRecords" :key="record.id" class="capture-item">
                 <label class="capture-select">
                   <input v-model="selectedCaptureIds" type="checkbox" :value="record.id" />
-                  <span>{{ record.capture_mode === 'dual' ? '双摄记录' : '单摄图片' }}</span>
+                  <span>{{ recordTypeLabel(record) }}</span>
                 </label>
 
                 <div class="capture-meta">
-                  <strong>
-                    {{
-                      record.capture_mode === 'dual'
-                        ? (record.group_name || record.id)
-                        : (record.files[0]?.file_name || record.id)
-                    }}
-                  </strong>
+                  <strong>{{ recordTitle(record) }}</strong>
                   <span>{{ formatDateTime(record.created_at) }}</span>
                 </div>
 
-                <div class="capture-files">
+                <div v-if="record.archive_file_url" class="capture-files">
+                  <a class="capture-link" :href="record.archive_file_url" target="_blank" rel="noopener">
+                    ZIP: {{ record.archive_name }}
+                  </a>
+                  <span class="capture-extra">共 {{ record.group_count || 0 }} 组照片</span>
+                </div>
+
+                <div v-else class="capture-files">
                   <a
                     v-for="fileInfo in record.files"
                     :key="`${record.id}-${fileInfo.file_name}`"
@@ -215,6 +255,18 @@
                   >
                     {{ fileInfo.role || 'image' }}: {{ fileInfo.file_name }}
                   </a>
+                </div>
+
+                <div class="capture-item-actions">
+                  <el-button
+                    size="small"
+                    type="danger"
+                    plain
+                    :loading="deletingRecordId === record.id"
+                    @click="deleteCaptureRecord(record)"
+                  >
+                    删除
+                  </el-button>
                 </div>
               </article>
             </div>
@@ -228,8 +280,8 @@
 
 <script>
 import { computed, defineComponent, onMounted, reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
-import { captureCameraImages, downloadCameraCaptures } from '@/api/detection'
+import { ElMessage, ElMessageBox } from 'element-plus'
+import { captureCameraImages, deleteCameraCaptureRecord, downloadCameraCaptures, saveCameraCaptureStages } from '@/api/detection'
 import CameraPreviewCard from '@/components/CameraPreviewCard.vue'
 import { useCameraWorkspace } from '@/composables/useCameraWorkspace'
 
@@ -253,10 +305,13 @@ export default defineComponent({
     const scanning = ref(false)
     const savingSelection = ref(false)
     const capturing = ref(false)
+    const savingPending = ref(false)
     const downloadingZip = ref(false)
+    const deletingRecordId = ref('')
     const errorMessage = ref('')
     const selectedCaptureIds = ref([])
     const previewEnabled = ref(false)
+    const pendingCaptureGroups = ref([])
 
     const registry = computed(() => state.registry)
     const captureRecords = computed(() => state.captures || [])
@@ -295,6 +350,30 @@ export default defineComponent({
     const cameraLabel = (cameraIndex) => {
       const current = availableCameraOptions.value.find((item) => item.camera_index === cameraIndex)
       return current?.optionLabel || `相机 ${cameraIndex}`
+    }
+
+    const recordTypeLabel = (record) => {
+      if (record.capture_mode === 'bundle') return '照片压缩包'
+      if (record.capture_mode === 'dual') return '双摄记录'
+      return '单摄图片'
+    }
+
+    const recordTitle = (record) => {
+      if (record.archive_name) return record.archive_name
+      if (record.capture_mode === 'dual') return record.group_name || record.id
+      return record.files?.[0]?.file_name || record.id
+    }
+
+    const normalizePendingGroup = (group, indexOffset = 0) => ({
+      ...group,
+      displayName: `第${pendingCaptureGroups.value.length + indexOffset + 1}组图片`
+    })
+
+    const rebuildPendingGroupNames = () => {
+      pendingCaptureGroups.value = pendingCaptureGroups.value.map((group, index) => ({
+        ...group,
+        displayName: `第${index + 1}组图片`
+      }))
     }
 
     const loadCaptureRecords = async () => {
@@ -368,14 +447,29 @@ export default defineComponent({
       ElMessage.info('摄像头预览已停止')
     }
 
-    const captureSelected = async () => {
+    const buildCapturePayload = () => {
       const selected = [...previewCameraIndices.value]
+      const isDual = selected.length === 2
+      return {
+        selected,
+        payload: {
+          camera_indices: selected,
+          capture_mode: isDual ? 'dual' : 'single',
+          left_camera_index: isDual ? selected[0] : undefined,
+          right_camera_index: isDual ? selected[1] : undefined,
+          persist: false
+        }
+      }
+    }
+
+    const captureSelected = async () => {
+      const { selected, payload } = buildCapturePayload()
       if (!selected.length) {
-        errorMessage.value = '请先勾选至少一个用于拍照测试的摄像头'
+        errorMessage.value = '请先勾选至少一个用于拍照的摄像头'
         return
       }
       if (selected.length > 2) {
-        errorMessage.value = '拍照测试仅支持单摄或双摄，请将预览设备控制在 1 到 2 个'
+        errorMessage.value = '拍照仅支持单摄或双摄，请将预览设备控制在 1 到 2 个'
         return
       }
 
@@ -389,16 +483,11 @@ export default defineComponent({
           await new Promise((resolve) => window.setTimeout(resolve, PREVIEW_RELEASE_DELAY_MS))
         }
 
-        const isDual = selected.length === 2
-        const response = await captureCameraImages({
-          camera_indices: selected,
-          capture_mode: isDual ? 'dual' : 'single',
-          left_camera_index: isDual ? selected[0] : undefined,
-          right_camera_index: isDual ? selected[1] : undefined
-        })
-
-        await loadCaptureRecords()
-        ElMessage.success(`拍照完成，本次生成 ${response.records?.length || 0} 条记录`)
+        const response = await captureCameraImages(payload)
+        const stagedGroups = (response.staged_groups || []).map((group, index) => normalizePendingGroup(group, index))
+        pendingCaptureGroups.value = [...pendingCaptureGroups.value, ...stagedGroups]
+        rebuildPendingGroupNames()
+        ElMessage.success(`拍照完成，已加入 ${stagedGroups.length} 组待保存照片`)
       } catch (error) {
         errorMessage.value = error?.response?.data?.error || error.message || '拍照失败'
       } finally {
@@ -406,6 +495,27 @@ export default defineComponent({
           previewEnabled.value = true
         }
         capturing.value = false
+      }
+    }
+
+    const savePendingCaptures = async () => {
+      if (!pendingCaptureGroups.value.length) {
+        return
+      }
+      savingPending.value = true
+      errorMessage.value = ''
+      try {
+        const response = await saveCameraCaptureStages({
+          stage_ids: pendingCaptureGroups.value.map((group) => group.stage_id)
+        })
+        pendingCaptureGroups.value = []
+        selectedCaptureIds.value = []
+        await loadCaptureRecords()
+        ElMessage.success(`已保存 ${response.record?.group_count || 0} 组照片，ZIP 已加入结果栏`)
+      } catch (error) {
+        errorMessage.value = error?.response?.data?.error || error.message || '保存拍照结果失败'
+      } finally {
+        savingPending.value = false
       }
     }
 
@@ -428,6 +538,35 @@ export default defineComponent({
         errorMessage.value = error?.response?.data?.error || error.message || '批量下载失败'
       } finally {
         downloadingZip.value = false
+      }
+    }
+
+    const deleteCaptureRecord = async (record) => {
+      try {
+        await ElMessageBox.confirm(
+          `删除后将移除记录“${recordTitle(record)}”以及对应的 ZIP 和图片文件，是否继续？`,
+          '删除拍照结果',
+          {
+            type: 'warning',
+            confirmButtonText: '删除',
+            cancelButtonText: '取消'
+          }
+        )
+      } catch {
+        return
+      }
+
+      deletingRecordId.value = record.id
+      errorMessage.value = ''
+      try {
+        await deleteCameraCaptureRecord(record.id)
+        selectedCaptureIds.value = selectedCaptureIds.value.filter((id) => id !== record.id)
+        await loadCaptureRecords()
+        ElMessage.success('拍照结果已删除')
+      } catch (error) {
+        errorMessage.value = error?.response?.data?.error || error.message || '删除拍照结果失败'
+      } finally {
+        deletingRecordId.value = ''
       }
     }
 
@@ -455,17 +594,24 @@ export default defineComponent({
       captureSelected,
       capturing,
       downloadingZip,
+      deletingRecordId,
       downloadSelectedZip,
+      deleteCaptureRecord,
       dualPairLabel,
       errorMessage,
       formatDateTime,
       lastScanText,
       loadCaptureRecords,
       localSelection,
+      pendingCaptureGroups,
       previewCameraIndices,
       previewEnabled,
+      recordTitle,
+      recordTypeLabel,
       registry,
       saveCurrentSelection,
+      savePendingCaptures,
+      savingPending,
       savingSelection,
       scanDevices,
       scanning,
@@ -617,13 +763,15 @@ export default defineComponent({
 }
 
 .device-list,
-.capture-list {
+.capture-list,
+.pending-list {
   display: grid;
   gap: 12px;
 }
 
 .device-row,
-.capture-item {
+.capture-item,
+.pending-item {
   display: flex;
   gap: 14px;
   padding: 14px 16px;
@@ -659,9 +807,53 @@ export default defineComponent({
   gap: 16px;
 }
 
+.pending-section {
+  margin-top: 20px;
+  display: grid;
+  gap: 12px;
+}
+
+.pending-header,
+.pending-title-row,
 .capture-toolbar {
   display: flex;
+  justify-content: space-between;
   gap: 12px;
+  align-items: center;
+}
+
+.pending-header h3 {
+  margin: 0;
+  color: #173b32;
+}
+
+.pending-header span,
+.pending-title-row span,
+.pending-item p,
+.capture-extra {
+  color: #587166;
+  font-size: 13px;
+}
+
+.pending-item {
+  flex-direction: column;
+}
+
+.pending-title-row strong {
+  color: #173b32;
+}
+
+.pending-item p {
+  margin: 0;
+}
+
+.pending-files,
+.capture-files {
+  display: grid;
+  gap: 6px;
+}
+
+.capture-toolbar {
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
@@ -670,16 +862,16 @@ export default defineComponent({
   flex-direction: column;
 }
 
+.capture-item-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
 .capture-select {
   display: flex;
   gap: 8px;
   align-items: center;
   color: #35594d;
-}
-
-.capture-files {
-  display: grid;
-  gap: 6px;
 }
 
 .capture-link {

@@ -13,6 +13,7 @@ export function useCameraPreviewSocket(options = {}) {
   const onError = options.onError || (() => {})
 
   const imageUrl = ref('')
+  const frameDataUrl = ref('')
   const connected = ref(false)
   const errorMessage = ref('')
   const status = ref(null)
@@ -41,6 +42,7 @@ export function useCameraPreviewSocket(options = {}) {
       URL.revokeObjectURL(imageUrl.value)
       imageUrl.value = ''
     }
+    frameDataUrl.value = ''
   }
 
   const closeSocket = ({ clearImage = false } = {}) => {
@@ -84,8 +86,16 @@ export function useCameraPreviewSocket(options = {}) {
   const updateImage = async (data) => {
     const buffer = data instanceof Blob ? await data.arrayBuffer() : data
     const nextUrl = URL.createObjectURL(new Blob([buffer], { type: 'image/jpeg' }))
+    const bytes = new Uint8Array(buffer)
+    let binary = ''
+    const chunkSize = 0x8000
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      const chunk = bytes.subarray(offset, offset + chunkSize)
+      binary += String.fromCharCode(...chunk)
+    }
     revokeImageUrl()
     imageUrl.value = nextUrl
+    frameDataUrl.value = `data:image/jpeg;base64,${window.btoa(binary)}`
     errorMessage.value = ''
   }
 
@@ -208,6 +218,7 @@ export function useCameraPreviewSocket(options = {}) {
   return {
     connected,
     errorMessage,
+    frameDataUrl,
     imageUrl,
     status,
     connect,

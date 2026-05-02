@@ -149,6 +149,10 @@
               </el-table>
             </article>
           </div>
+
+          <div class="detail-footer">
+            <el-button @click="detailVisible = false">关闭窗口</el-button>
+          </div>
         </div>
       </el-dialog>
     </div>
@@ -384,6 +388,11 @@ export default {
 }
 
 .dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.detail-footer {
   display: flex;
   justify-content: flex-end;
 }

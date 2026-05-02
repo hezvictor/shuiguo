@@ -211,11 +211,28 @@ export function captureCameraImages(data) {
   })
 }
 
+export function saveCameraCaptureStages(data) {
+  return request({
+    url: '/api/camera/capture/save/',
+    method: 'post',
+    data,
+    timeout: 120000
+  })
+}
+
 export function getCameraCaptures(params = {}) {
   return request({
     url: '/api/camera/captures/',
     method: 'get',
     params,
+    timeout: 15000
+  })
+}
+
+export function deleteCameraCaptureRecord(recordId) {
+  return request({
+    url: `/api/camera/captures/${recordId}/`,
+    method: 'delete',
     timeout: 15000
   })
 }
