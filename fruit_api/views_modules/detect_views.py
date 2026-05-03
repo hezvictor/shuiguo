@@ -190,9 +190,10 @@ def create_image_detection_task_view(request):
         return serializer_error_response(serializer.errors)
 
     try:
-        standard_images, diameter_groups = resolve_image_detection_inputs(
+        standard_images, diameter_groups, mixed_groups = resolve_image_detection_inputs(
             single_inputs=request.FILES.getlist("single_inputs"),
             diameter_inputs=request.FILES.getlist("diameter_inputs"),
+            mixed_inputs=request.FILES.getlist("mixed_inputs"),
         )
     except UploadResolveError as exc:
         return error_response(exc)
@@ -208,10 +209,11 @@ def create_image_detection_task_view(request):
             user=request.user,
             standard_images=standard_images,
             diameter_groups=diameter_groups,
+            mixed_groups=mixed_groups,
             options={
-                "detect_classification": bool(standard_images),
-                "detect_ripeness": bool(standard_images) and serializer.validated_data["detect_ripeness"],
-                "detect_diameter": bool(diameter_groups),
+                "detect_classification": bool(standard_images or mixed_groups),
+                "detect_ripeness": bool(standard_images or mixed_groups) and serializer.validated_data["detect_ripeness"],
+                "detect_diameter": bool(diameter_groups or mixed_groups),
             },
             app_config=app_config,
         )

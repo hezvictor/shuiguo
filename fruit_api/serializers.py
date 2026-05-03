@@ -46,7 +46,9 @@ class DetectionHistorySerializer(serializers.ModelSerializer):
     def _media_url(value):
         if not value:
             return None
-        if isinstance(value, str) and (value.startswith("http://") or value.startswith("https://") or value.startswith("/media/")):
+        if isinstance(value, str) and (
+            value.startswith("http://") or value.startswith("https://") or value.startswith("/media/")
+        ):
             return value
         return f"{settings.MEDIA_URL.rstrip('/')}/{value.lstrip('/')}"
 
@@ -162,15 +164,17 @@ class ImageDetectionTaskCreateSerializer(serializers.Serializer):
         request = self.context["request"]
         single_inputs = request.FILES.getlist("single_inputs")
         diameter_inputs = request.FILES.getlist("diameter_inputs")
+        mixed_inputs = request.FILES.getlist("mixed_inputs")
 
-        if not single_inputs and not diameter_inputs:
-            raise serializers.ValidationError("请至少上传单图片输入或果径图片输入")
+        if not single_inputs and not diameter_inputs and not mixed_inputs:
+            raise serializers.ValidationError("请至少上传单图片输入、果径图片输入或混合输入。")
 
         if attrs.get("detect_ripeness"):
             attrs["detect_classification"] = True
 
         attrs["single_input_count"] = len(single_inputs)
         attrs["diameter_input_count"] = len(diameter_inputs)
+        attrs["mixed_input_count"] = len(mixed_inputs)
         return attrs
 
 
@@ -356,9 +360,7 @@ class MeasureInferSerializer(serializers.Serializer):
     def validate(self, attrs):
         forbidden = [field for field in self.FORBIDDEN_FIELDS if field in self.initial_data]
         if forbidden:
-            raise serializers.ValidationError(
-                {field: "已禁用本地路径输入，请改为上传双目图片文件。" for field in forbidden}
-            )
+            raise serializers.ValidationError({field: "已禁用本地路径输入，请改为上传双目图像文件。" for field in forbidden})
         left_file = attrs.get("left_image")
         right_file = attrs.get("right_image")
         if left_file is None or right_file is None:
@@ -383,9 +385,7 @@ class MeasureDistanceSerializer(serializers.Serializer):
     def validate(self, attrs):
         forbidden = [field for field in self.FORBIDDEN_FIELDS if field in self.initial_data]
         if forbidden:
-            raise serializers.ValidationError(
-                {field: "已禁用本地路径输入，请改为使用 inference_id。" for field in forbidden}
-            )
+            raise serializers.ValidationError({field: "已禁用本地路径输入，请改为使用 inference_id。" for field in forbidden})
         has_points = attrs.get("point1") is not None or attrs.get("point2") is not None
         has_bbox = attrs.get("bbox") is not None
         has_target_mode = attrs.get("measure_all_targets") or attrs.get("target_index") is not None
