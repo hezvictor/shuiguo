@@ -3,12 +3,12 @@ Django settings for shuiguo project.
 """
 
 import os
+import sys
 from pathlib import Path
 
+from django.core.exceptions import ImproperlyConfigured
+
 BASE_DIR = Path(__file__).resolve().parent.parent
-FRONTEND_DIST_DIR = Path(
-    os.environ.get("FRONTEND_DIST_DIR", str(BASE_DIR / "frontend_dist"))
-).resolve()
 
 
 def load_local_env(env_path: Path) -> None:
@@ -28,9 +28,41 @@ def load_local_env(env_path: Path) -> None:
 
 load_local_env(BASE_DIR / ".env.local")
 
-SECRET_KEY = "django-insecure-9mvbwht*#kz5+*ph0xyg=k5%igoqwwuoqquz8&gvy8=p+fa=o4"
-DEBUG = True
-ALLOWED_HOSTS = []
+
+def env_bool(name: str, default: bool = False) -> bool:
+    value = os.environ.get(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def env_list(name: str, default: list[str] | None = None) -> list[str]:
+    value = os.environ.get(name)
+    if value is None:
+        return list(default or [])
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+IS_TESTING = len(sys.argv) > 1 and sys.argv[1] == "test"
+DEBUG = env_bool("DEBUG", default=False)
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    if DEBUG or IS_TESTING:
+        SECRET_KEY = "dev-secret-key-not-for-production"
+    else:
+        raise ImproperlyConfigured("SECRET_KEY environment variable is required when DEBUG is disabled.")
+
+default_allowed_hosts = ["127.0.0.1", "localhost"]
+if DEBUG:
+    default_allowed_hosts.append("0.0.0.0")
+if IS_TESTING:
+    default_allowed_hosts.append("testserver")
+
+ALLOWED_HOSTS = list(dict.fromkeys(env_list("ALLOWED_HOSTS", default_allowed_hosts)))
+FRONTEND_DIST_DIR = Path(
+    os.environ.get("FRONTEND_DIST_DIR", str(BASE_DIR / "frontend_dist"))
+).resolve()
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -200,6 +232,7 @@ REST_FRAMEWORK = {
     "PAGE_SIZE": 10,
     "PAGE_SIZE_QUERY_PARAM": "page_size",
     "MAX_PAGE_SIZE": 100,
+    "EXCEPTION_HANDLER": "fruit_api.exception_handler.api_exception_handler",
 }
 
 TEST_RUNNER = "fruit_api.test_runner.CompatibleDiscoverRunner"

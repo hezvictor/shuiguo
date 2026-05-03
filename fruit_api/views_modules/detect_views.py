@@ -1,9 +1,9 @@
 ﻿from django.apps import apps
 from django.conf import settings
-from django.contrib.auth.decorators import login_required
 from django.http import HttpResponse
 from rest_framework import status
-from rest_framework.decorators import api_view
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from fruit_api.models import DetectionHistory
@@ -27,7 +27,7 @@ from fruit_api.services.detection.detect_service import (
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def predict_view(request):
     serializer = ImageUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -48,7 +48,7 @@ def predict_view(request):
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def predict_with_ripeness(request):
     serializer = ImageUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -69,7 +69,7 @@ def predict_with_ripeness(request):
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def predict_ripeness_by_type(request):
     serializer = TypeUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -94,7 +94,7 @@ def predict_ripeness_by_type(request):
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def yolo_detect_with_boxes(request):
     serializer = ImageUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -115,7 +115,7 @@ def yolo_detect_with_boxes(request):
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def yolo_detect_info(request):
     serializer = ImageUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -144,7 +144,7 @@ def yolo_detect_info(request):
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def yolo_report(request):
     serializer = ImageUploadSerializer(data=request.data)
     if not serializer.is_valid():
@@ -183,7 +183,7 @@ def yolo_report(request):
 
 
 @api_view(['POST'])
-@login_required
+@permission_classes([IsAuthenticated])
 def create_image_detection_task_view(request):
     serializer = ImageDetectionTaskCreateSerializer(data=request.data, context={"request": request})
     if not serializer.is_valid():

@@ -3,32 +3,31 @@ import io
 import os
 import shutil
 import tempfile
+import time
 import zipfile
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone as dt_timezone
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+from asgiref.sync import async_to_sync
+from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import SimpleTestCase, override_settings
 from PIL import Image
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 
-from fruit_api.models import DetectionHistory, VideoProcessingTask
+from fruit_api.exception_handler import api_exception_handler
+from fruit_api.exceptions import AppNotFoundError, FileLifecycleError
+from fruit_api.models import DetectionHistory
+from fruit_api.services.storage import collect_media_cleanup_targets, delete_media_file, ensure_media_path
 from fruit_api.services.detection.detect_service import InvalidParamError, parse_selected_indices
 from fruit_api.services.detection.image_batch_service import create_image_detection_task
 from fruit_api.services.detection.upload_resolver_service import UploadResolveError, resolve_image_detection_inputs
-from fruit_api.services.video.video_service import (
-    VideoTaskStateError,
-    create_video_task,
-    process_video_task,
-    progress_payload,
-    validate_completed_task,
-)
+from rest_framework.exceptions import ValidationError
 
 
 class ErrorPayloadAssertMixin:
@@ -36,6 +35,19 @@ class ErrorPayloadAssertMixin:
         self.assertIn('status', response.data)
         self.assertEqual(response.data['status'], 'error')
         self.assertIn('error', response.data)
+
+
+class WebsocketAuthTests(SimpleTestCase):
+    def test_fruit_recognition_websocket_requires_authenticated_user(self):
+        async def scenario():
+            from shuiguo.asgi import application
+
+            communicator = WebsocketCommunicator(application, '/ws/fruit-recognition/')
+            connected, detail = await communicator.connect()
+            self.assertFalse(connected)
+            self.assertEqual(detail, 4401)
+
+        async_to_sync(scenario)()
 
 
 class AuthApiTests(APITestCase):
@@ -59,6 +71,31 @@ class AuthApiTests(APITestCase):
     def test_api_login_invalid_password(self):
         resp = self.client.post('/api/login/', {'username': 'auth_user', 'password': 'wrong'})
         self.assertEqual(resp.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_register_requires_csrf_when_enforced(self):
+        client = APIClient(enforce_csrf_checks=True)
+        resp = client.post('/api/register/', {'username': 'new_user', 'password': 'pass1234'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_api_login_requires_csrf_when_enforced(self):
+        client = APIClient(enforce_csrf_checks=True)
+        resp = client.post('/api/login/', {'username': 'auth_user', 'password': 'pass1234'}, format='json')
+        self.assertEqual(resp.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_api_login_accepts_valid_csrf_token(self):
+        client = APIClient(enforce_csrf_checks=True)
+        csrf_resp = client.get('/api/csrf/')
+        token = csrf_resp.cookies['csrftoken'].value
+
+        resp = client.post(
+            '/api/login/',
+            {'username': 'auth_user', 'password': 'pass1234'},
+            format='json',
+            HTTP_X_CSRFTOKEN=token,
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['status'], 'success')
 
     def test_api_login_success_and_user_info(self):
         resp = self.client.post('/api/login/', {'username': 'auth_user', 'password': 'pass1234'})
@@ -194,6 +231,24 @@ class DetectionHistoryApiTests(APITestCase):
             self.assertFalse(os.path.exists(os.path.join(td, task_root_rel)))
         finally:
             shutil.rmtree(td, ignore_errors=True)
+
+
+class DetectApiAuthTests(ErrorPayloadAssertMixin, APITestCase):
+    def _image_file(self, name, color=(120, 160, 200)):
+        buffer = io.BytesIO()
+        Image.new('RGB', (16, 16), color=color).save(buffer, format='PNG')
+        return SimpleUploadedFile(name, buffer.getvalue(), content_type='image/png')
+
+    def test_predict_requires_authenticated_json_response(self):
+        resp = self.client.post(
+            '/api/predict/',
+            {'image': self._image_file('predict.png')},
+            format='multipart',
+        )
+
+        self.assertIn(resp.status_code, {status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN})
+        self.assertNotEqual(resp.status_code, status.HTTP_302_FOUND)
+        self.assert_error_payload(resp)
 
 
 class ImageDetectionTaskApiTests(APITestCase):
@@ -646,10 +701,42 @@ class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assert_error_payload(resp)
         self.assertIn('details', resp.data)
 
+    def test_measure_infer_rejects_local_path_fields(self):
+        resp = self.client.post(
+            '/api/measure/infer/',
+            {
+                'left_image': self._image_file('left.png'),
+                'right_image': self._image_file('right.png'),
+                'left_image_path': 'E:\\tmp\\left.png',
+                'right_image_path': 'E:\\tmp\\right.png',
+                'calib_path': 'E:\\tmp\\calib.npz',
+                'ckpt_path': 'E:\\tmp\\mix_all.pth',
+            },
+            format='multipart',
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assert_error_payload(resp)
+        self.assertIn('left_image_path', resp.data['details'])
+
     def test_measure_distance_requires_inference_or_disp(self):
         resp = self.client.post('/api/measure/distance/', {}, format='json')
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assert_error_payload(resp)
+
+    def test_measure_distance_rejects_local_path_fields(self):
+        resp = self.client.post(
+            '/api/measure/distance/',
+            {
+                'inference_id': 'infer-1',
+                'disp_npy_path': 'E:\\tmp\\disp.npy',
+                'calib_path': 'E:\\tmp\\calib.npz',
+            },
+            format='json',
+        )
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assert_error_payload(resp)
+        self.assertIn('disp_npy_path', resp.data['details'])
 
     @patch('fruit_api.views_modules.diameter_views.measure_and_save_history')
     @patch('fruit_api.views_modules.diameter_views.apps.get_app_config')
@@ -1230,22 +1317,6 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         mock_run_dual.assert_called_once()
 
 
-class VideoApiTests(ErrorPayloadAssertMixin, APITestCase):
-    def setUp(self):
-        self.user = User.objects.create_user(username='video_user', password='pass1234')
-        self.client.force_authenticate(user=self.user)
-
-    def test_video_progress_not_found(self):
-        resp = self.client.get('/api/video/progress/not-exists/')
-        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
-        self.assert_error_payload(resp)
-
-    def test_video_cleanup_not_found(self):
-        resp = self.client.delete('/api/video/cleanup/not-exists/')
-        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
-        self.assert_error_payload(resp)
-
-
 class ConsoleApiTests(APITestCase):
     def setUp(self):
         self.user = User.objects.create_user(username='console_user', password='pass1234')
@@ -1263,29 +1334,6 @@ class ConsoleApiTests(APITestCase):
             DetectionHistory.objects.filter(pk=row.pk).update(created_at=created_at)
             row.refresh_from_db()
         return row
-
-    def _create_video_task(self, *, user=None, task_id='task-1', status_name='processing', created_at=None, updated_at=None):
-        task = VideoProcessingTask.objects.create(
-            task_id=task_id,
-            user=user or self.user,
-            original_file_name=f'{task_id}.mp4',
-            input_path=f'E:\\tmp\\{task_id}_input.mp4',
-            output_path=f'E:\\tmp\\{task_id}_output.mp4',
-            process_fps=5,
-            status=status_name,
-            progress=100 if status_name == 'completed' else 20,
-            processed_frames=12,
-            total_frames=60,
-            frame_rate=25.0,
-            video_width=1920,
-            video_height=1080,
-            message='ok',
-        )
-        if created_at is not None:
-            updated_at = updated_at or created_at
-            VideoProcessingTask.objects.filter(pk=task.pk).update(created_at=created_at, updated_at=updated_at)
-            task.refresh_from_db()
-        return task
 
     def test_console_overview_uses_requested_timezone_for_custom_range(self):
         before_range = datetime(2026, 4, 26, 15, 59, 59, tzinfo=dt_timezone.utc)
@@ -1323,20 +1371,10 @@ class ConsoleApiTests(APITestCase):
             report_file='diameter/result.png',
         )
         self._create_history(
-            user=self.other_user,
-            detection_type='video',
-            created_at=start_of_day,
-            summary={'total_targets': 77},
-        )
-        self._create_history(
             detection_type='realtime',
             created_at=after_range,
             summary={'total_targets': 88},
         )
-
-        self._create_video_task(task_id='task-completed', status_name='completed', created_at=start_of_day)
-        self._create_video_task(task_id='task-processing', status_name='processing', created_at=end_of_day)
-        self._create_video_task(user=self.other_user, task_id='task-other', status_name='error', created_at=start_of_day)
 
         resp = self.client.get(
             '/api/console/overview/?range_type=custom&start_date=2026-04-27&end_date=2026-04-27&timezone=Asia/Shanghai'
@@ -1363,10 +1401,6 @@ class ConsoleApiTests(APITestCase):
         self.assertEqual(resp.data['diameter_analysis']['avg_diameter_mm'], 60.0)
         self.assertEqual(resp.data['diameter_analysis']['min_diameter_mm'], 55.0)
         self.assertEqual(resp.data['diameter_analysis']['max_diameter_mm'], 66.0)
-        self.assertEqual(resp.data['video_task_summary']['total'], 2)
-        self.assertEqual(resp.data['video_task_summary']['completed'], 1)
-        self.assertEqual(resp.data['video_task_summary']['processing'], 1)
-
     def test_console_recent_returns_latest_items(self):
         base_time = datetime(2026, 4, 27, 8, 0, 0, tzinfo=dt_timezone.utc)
         for index in range(12):
@@ -1378,24 +1412,13 @@ class ConsoleApiTests(APITestCase):
                 report_file=f'reports/{index}.json',
             )
 
-        for index in range(6):
-            created_at = base_time + timedelta(minutes=index)
-            self._create_video_task(
-                task_id=f'task-{index}',
-                status_name='completed' if index % 2 == 0 else 'processing',
-                created_at=created_at,
-                updated_at=created_at + timedelta(minutes=30),
-            )
-
         resp = self.client.get(
             '/api/console/recent/?range_type=custom&start_date=2026-04-27&end_date=2026-04-28&timezone=UTC'
         )
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(len(resp.data['recent_histories']), 10)
-        self.assertEqual(len(resp.data['recent_video_tasks']), 5)
         self.assertEqual(resp.data['recent_histories'][0]['summary']['total_targets'], 12)
-        self.assertEqual(resp.data['recent_video_tasks'][0]['task_id'], 'task-5')
 
     @patch('fruit_api.services.console_service.get_stereo_calibration_service')
     @patch('fruit_api.services.console_service.get_measure_runtime_status')
@@ -1454,106 +1477,28 @@ class DetectApiErrorFormatTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertIn('details', resp.data)
 
 
-class VideoServiceAdvancedTests(APITestCase):
+class RemovedVideoRoutesTests(APITestCase):
     def setUp(self):
-        self.user = User.objects.create_user(username='video_service_user', password='pass1234')
+        self.user = User.objects.create_user(username='removed_video_user', password='pass1234')
+        self.client.force_authenticate(user=self.user)
 
-    def _video_file(self, name='demo.mp4', size=128):
-        return SimpleUploadedFile(name, b'0' * size, content_type='video/mp4')
+    def test_video_upload_route_removed(self):
+        resp = self.client.post('/api/video/upload/')
+        self.assertEqual(resp.status_code, status.HTTP_404_NOT_FOUND)
 
-    @patch('fruit_api.services.video.video_service.VideoProcessingTask.objects.create')
-    @patch('fruit_api.services.video.video_service.os.makedirs')
-    @patch('fruit_api.services.video.video_service.open')
-    @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
-    def test_create_video_task_concurrent_submit_generates_unique_ids(
-        self,
-        _mock_open,
-        _mock_makedirs,
-        mock_task_create,
-    ):
-        def fake_create(**kwargs):
-            return SimpleNamespace(task_id=kwargs['task_id'])
 
-        mock_task_create.side_effect = fake_create
+class ExceptionHandlerTests(SimpleTestCase):
+    def test_app_error_uses_standard_payload(self):
+        response = api_exception_handler(AppNotFoundError("missing"), {"view": None})
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+        self.assertEqual(response.data["code"], "not_found")
+        self.assertEqual(response.data["error"], "missing")
 
-        def create_one(idx):
-            return create_video_task(self._video_file(name=f'v_{idx}.mp4'), process_fps=5, user_id=self.user.id).task_id
-
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            task_ids = list(executor.map(create_one, range(24)))
-
-        self.assertEqual(len(task_ids), len(set(task_ids)))
-        self.assertEqual(mock_task_create.call_count, 24)
-
-    @patch('fruit_api.services.video.video_service._process_frame', side_effect=lambda frame, *_: frame)
-    @patch('fruit_api.services.video.video_service.cv2.VideoWriter')
-    @patch('fruit_api.services.video.video_service.cv2.VideoCapture')
-    @patch('fruit_api.services.video.video_service.apps.get_app_config')
-    @override_settings(MEDIA_ROOT=os.path.join(settings.BASE_DIR, 'test_media'))
-    def test_process_video_task_long_video_simulation_updates_progress(
-        self,
-        mock_get_app_config,
-        mock_video_capture,
-        mock_video_writer,
-        _mock_process_frame,
-    ):
-        class FakeCapture:
-            def __init__(self, total_frames=120):
-                self.total_frames = total_frames
-                self.cursor = 0
-
-            def isOpened(self):
-                return True
-
-            def get(self, prop):
-                cv2 = __import__('cv2')
-                mapping = {
-                    cv2.CAP_PROP_FRAME_COUNT: self.total_frames,
-                    cv2.CAP_PROP_FPS: 30.0,
-                    cv2.CAP_PROP_FRAME_WIDTH: 640,
-                    cv2.CAP_PROP_FRAME_HEIGHT: 480,
-                }
-                return mapping.get(prop, 0)
-
-            def read(self):
-                if self.cursor >= self.total_frames:
-                    return False, None
-                self.cursor += 1
-                return True, SimpleNamespace()
-
-            def release(self):
-                return None
-
-        class FakeWriter:
-            def write(self, _frame):
-                return None
-
-            def release(self):
-                return None
-
-        mock_get_app_config.return_value = Mock()
-        mock_video_capture.return_value = FakeCapture()
-        mock_video_writer.return_value = FakeWriter()
-
-        task = VideoProcessingTask.objects.create(
-            task_id='long-video-task',
-            user=None,
-            original_file_name='long.mp4',
-            input_path=os.path.join(settings.MEDIA_ROOT, 'video_input', 'in.mp4'),
-            output_path=os.path.join(settings.MEDIA_ROOT, 'video_output', 'out.mp4'),
-            process_fps=5,
-            status='processing',
-        )
-
-        process_video_task(task.task_id)
-        task.refresh_from_db()
-
-        self.assertEqual(task.status, 'completed')
-        self.assertEqual(task.progress, 100)
-        self.assertEqual(task.total_frames, 120)
-        self.assertGreater(task.processed_frames, 0)
-        self.assertIsInstance(task.report_data, dict)
-        self.assertIn('total_targets', task.report_data)
+    def test_validation_error_uses_details(self):
+        response = api_exception_handler(ValidationError({"image": ["required"]}), {"view": None})
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(response.data["code"], "validation_error")
+        self.assertIn("image", response.data["details"])
 
 
 class ServiceUnitTests(SimpleTestCase):
@@ -1579,24 +1524,28 @@ class ServiceUnitTests(SimpleTestCase):
         with self.assertRaises(InvalidParamError):
             parse_selected_indices('not-json')
 
-    def test_progress_payload_contains_report(self):
-        task = SimpleNamespace(
-            task_id='t1',
-            original_file_name='a.mp4',
-            status='completed',
-            progress=100,
-            processed_frames=10,
-            total_frames=10,
-            video_width=1920,
-            video_height=1080,
-            frame_rate=25,
-            message='处理完成',
-            report_data={'k': 1},
-            report_file='reports/r.json',
-        )
-        payload = progress_payload(task)
-        self.assertIn('report', payload)
-        self.assertIn('report_file', payload)
+    @patch('fruit_api.services.detection.diameter_app_service.get_diameter_service')
+    def test_run_measure_inference_strips_private_paths(self, mock_get_diameter_service):
+        mock_get_diameter_service.return_value.run_inference.return_value = {
+            'success': True,
+            'inference_id': 'infer-1',
+            'left_image_path': 'E:\\tmp\\left.png',
+            'right_image_path': 'E:\\tmp\\right.png',
+            'disp_npy_path': 'E:\\tmp\\disp.npy',
+            'disp_vis_url': '/media/diameter_tmp/infer-1/disp_color.png',
+            'detect_vis_url': '/media/diameter_tmp/infer-1/left_detected.png',
+        }
+
+        from fruit_api.services.detection.diameter_app_service import run_measure_inference
+
+        payload = run_measure_inference(yolo_model=Mock())
+
+        self.assertTrue(payload['success'])
+        self.assertEqual(payload['inference_id'], 'infer-1')
+        self.assertEqual(payload['disp_vis_url'], '/media/diameter_tmp/infer-1/disp_color.png')
+        self.assertNotIn('left_image_path', payload)
+        self.assertNotIn('right_image_path', payload)
+        self.assertNotIn('disp_npy_path', payload)
 
     @patch('fruit_api.services.camera.stereo_camera_service._list_windows_camera_devices')
     @patch('fruit_api.services.camera.stereo_camera_service._require_cv2')
@@ -1818,10 +1767,110 @@ class ServiceUnitTests(SimpleTestCase):
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
-    def test_validate_completed_task_raises_for_processing(self):
-        task = SimpleNamespace(status='processing')
-        with self.assertRaises(VideoTaskStateError):
-            validate_completed_task(task)
+    def test_ensure_media_path_rejects_escape(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'file_lifecycle_escape')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            with override_settings(MEDIA_ROOT=media_root):
+                with self.assertRaises(FileLifecycleError):
+                    ensure_media_path('../escape.txt')
+
+                with self.assertRaises(FileLifecycleError):
+                    ensure_media_path(os.path.join(os.path.dirname(media_root), 'escape.txt'))
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_delete_media_file_prunes_empty_parents(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'file_lifecycle_delete')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            with override_settings(MEDIA_ROOT=media_root):
+                target_rel = os.path.join('camera_captures', 'bundles', '20260502', 'bundle.zip')
+                target_path = os.path.join(media_root, target_rel)
+                os.makedirs(os.path.dirname(target_path), exist_ok=True)
+                with open(target_path, 'wb') as handle:
+                    handle.write(b'zip')
+
+                delete_media_file(target_rel)
+
+                self.assertFalse(os.path.exists(target_path))
+                self.assertFalse(os.path.exists(os.path.dirname(target_path)))
+                self.assertTrue(os.path.exists(media_root))
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_collect_media_cleanup_targets_collects_nested_files_and_task_root(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'file_lifecycle_collect')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            with override_settings(MEDIA_ROOT=media_root):
+                files = set()
+                directories = set()
+
+                collect_media_cleanup_targets(
+                    {
+                        'task_root': 'image_tasks/task-1',
+                        'inputs': [
+                            '/media/image_tasks/task-1/inputs/source.jpg',
+                            {'annotated': 'image_tasks/task-1/outputs/result.jpg'},
+                        ],
+                        'archive': 'camera_captures/bundles/20260502/bundle.zip',
+                        'external': 'https://example.com/skip.jpg',
+                    },
+                    files,
+                    directories,
+                )
+
+                file_refs = {
+                    path.resolve().relative_to(os.path.realpath(media_root)).as_posix()
+                    for path in files
+                }
+                directory_refs = {
+                    path.resolve().relative_to(os.path.realpath(media_root)).as_posix()
+                    for path in directories
+                }
+
+                self.assertEqual(
+                    file_refs,
+                    {
+                        'image_tasks/task-1/inputs/source.jpg',
+                        'image_tasks/task-1/outputs/result.jpg',
+                        'camera_captures/bundles/20260502/bundle.zip',
+                    },
+                )
+                self.assertEqual(directory_refs, {'image_tasks/task-1'})
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_camera_capture_service_discard_staged_deletes_selected_and_remaining_groups(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_discard')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                first_stage = service._stage_dir(1, 'stage-a')
+                second_stage = service._stage_dir(1, 'stage-b')
+                first_stage.mkdir(parents=True, exist_ok=True)
+                second_stage.mkdir(parents=True, exist_ok=True)
+                (first_stage / 'meta.json').write_text('{}', encoding='utf-8')
+                (second_stage / 'meta.json').write_text('{}', encoding='utf-8')
+
+                deleted = service.discard_staged(user_id=1, stage_ids=['stage-a'])
+                self.assertEqual(deleted, 1)
+                self.assertFalse(first_stage.exists())
+                self.assertTrue(second_stage.exists())
+
+                deleted_all = service.discard_staged(user_id=1)
+                self.assertEqual(deleted_all, 1)
+                self.assertFalse(second_stage.exists())
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
 
     def test_resolve_image_detection_inputs_pairs_multiple_direct_diameter_groups(self):
         image_bytes = self._image_bytes()
@@ -1911,6 +1960,135 @@ class ServiceUnitTests(SimpleTestCase):
                 ],
                 diameter_inputs=[],
             )
+
+    def test_resolve_image_detection_inputs_rejects_oversized_archive(self):
+        with override_settings(IMAGE_TASK_MAX_ARCHIVE_BYTES=120):
+            with self.assertRaises(UploadResolveError) as exc:
+                resolve_image_detection_inputs(
+                    single_inputs=[
+                        self._zip_upload(
+                            'oversized.zip',
+                            {
+                                'single/payload.bin': b'a' * 256,
+                            },
+                        )
+                    ],
+                    diameter_inputs=[],
+                )
+
+        self.assertIn('上传大小限制', str(exc.exception))
+
+    def test_resolve_image_detection_inputs_rejects_excessive_archive_nesting(self):
+        image_bytes = self._image_bytes()
+        inner_buffer = io.BytesIO()
+        with zipfile.ZipFile(inner_buffer, 'w') as inner_archive:
+            inner_archive.writestr('group1/apple_left.png', image_bytes)
+            inner_archive.writestr('group1/apple_right.png', image_bytes)
+
+        with override_settings(IMAGE_TASK_MAX_ARCHIVE_NESTING_DEPTH=0):
+            with self.assertRaises(UploadResolveError) as exc:
+                resolve_image_detection_inputs(
+                    single_inputs=[],
+                    diameter_inputs=[
+                        self._zip_upload(
+                            'outer.zip',
+                            {
+                                'nested_bundle.zip': inner_buffer.getvalue(),
+                            },
+                        )
+                    ],
+                )
+
+        self.assertIn('嵌套层级', str(exc.exception))
+
+    @patch('fruit_api.services.camera.capture_service.capture_single_camera_frame')
+    @patch('fruit_api.services.camera.capture_service.get_camera_registry_service')
+    def test_camera_capture_service_capture_uses_index_lock_for_updates(
+        self,
+        mock_get_registry_service,
+        mock_capture_single,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_locking')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_get_registry_service.return_value.snapshot.return_value = {
+                'selection': {
+                    'preview_camera_indices': [0],
+                    'single_camera_index': 0,
+                    'dual_left_camera_index': 0,
+                    'dual_right_camera_index': 1,
+                    'backend': '',
+                }
+            }
+            mock_capture_single.return_value = np.zeros((24, 24, 3), dtype=np.uint8)
+
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                original_load = service._load_index_unlocked
+                original_save = service._save_index_unlocked
+
+                def wrapped_load():
+                    self.assertTrue(service._index_lock._is_owned())
+                    return original_load()
+
+                def wrapped_save(payload):
+                    self.assertTrue(service._index_lock._is_owned())
+                    return original_save(payload)
+
+                with patch.object(service, '_load_index_unlocked', side_effect=wrapped_load) as mock_load, patch.object(
+                    service,
+                    '_save_index_unlocked',
+                    side_effect=wrapped_save,
+                ) as mock_save:
+                    payload = service.capture(user_id=1, camera_indices=[0], capture_mode='single', persist=True)
+
+                self.assertTrue(payload['persisted'])
+                self.assertEqual(len(payload['records']), 1)
+                self.assertTrue(mock_load.called)
+                self.assertTrue(mock_save.called)
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_save_pil_image_prunes_expired_and_excess_realtime_frames(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'realtime_frame_cleanup')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            from fruit_api.services.detection import realtime_pipeline_service as realtime_module
+
+            with override_settings(
+                MEDIA_ROOT=media_root,
+                REALTIME_FRAME_RETENTION_SECONDS=60,
+                REALTIME_FRAME_MAX_FILES=2,
+                REALTIME_FRAME_CLEANUP_INTERVAL_SECONDS=0,
+            ):
+                output_dir = os.path.join(media_root, 'realtime_frames')
+                os.makedirs(output_dir, exist_ok=True)
+
+                old_path = os.path.join(output_dir, 'old.jpg')
+                keep_path = os.path.join(output_dir, 'keep.jpg')
+                trim_path = os.path.join(output_dir, 'trim.jpg')
+                Image.new('RGB', (8, 8), color=(1, 2, 3)).save(old_path, format='JPEG')
+                Image.new('RGB', (8, 8), color=(4, 5, 6)).save(keep_path, format='JPEG')
+                Image.new('RGB', (8, 8), color=(7, 8, 9)).save(trim_path, format='JPEG')
+
+                now = time.time()
+                os.utime(old_path, (now - 3600, now - 3600))
+                os.utime(keep_path, (now - 20, now - 20))
+                os.utime(trim_path, (now - 10, now - 10))
+
+                with patch.object(realtime_module, '_last_realtime_frame_cleanup_at', 0.0):
+                    saved_rel = realtime_module._save_pil_image(Image.new('RGB', (8, 8), color=(20, 30, 40)), 'new')
+
+                remaining_files = sorted(os.listdir(output_dir))
+                self.assertNotIn('old.jpg', remaining_files)
+                self.assertIn(os.path.basename(saved_rel), remaining_files)
+                self.assertLessEqual(len(remaining_files), 2)
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
 
 
 

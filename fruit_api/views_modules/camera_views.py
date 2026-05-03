@@ -1,5 +1,6 @@
 from django.apps import apps
 from django.conf import settings
+from pathlib import Path
 from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -150,7 +151,7 @@ def camera_calibration_run(request):
 def measure_runtime_status(request):
     try:
         payload = get_measure_runtime_status()
-        payload["calib_path"] = str(settings.MEASURE_CONFIG["CALIB_NPZ"])
+        payload["calib_path"] = Path(settings.MEASURE_CONFIG["CALIB_NPZ"]).name
         payload["device_setting"] = settings.MEASURE_CONFIG.get("DEVICE", "auto")
         return Response(payload, status=status.HTTP_200_OK)
     except DiameterDependencyError as exc:

@@ -9,9 +9,6 @@ import threading
 from pathlib import Path
 from django.apps import AppConfig
 from django.conf import settings
-from django.contrib.auth import get_user_model
-from django.db.models.signals import post_migrate
-from django.db.utils import OperationalError, ProgrammingError
 
 
 MANAGEMENT_COMMANDS_WITHOUT_MODEL_LOADING = {
@@ -33,49 +30,6 @@ def should_skip_model_loading():
     if len(sys.argv) < 2:
         return False
     return sys.argv[1] in MANAGEMENT_COMMANDS_WITHOUT_MODEL_LOADING
-
-
-def ensure_default_dev_superuser(**_kwargs):
-    """Create a predictable local admin user for development if it is missing."""
-    if not settings.DEBUG:
-        return
-    if os.environ.get('AUTO_CREATE_DEV_USER', '1') != '1':
-        return
-
-    username = os.environ.get('DEV_ADMIN_USERNAME', 'admin')
-    password = os.environ.get('DEV_ADMIN_PASSWORD', 'admin123456')
-    email = os.environ.get('DEV_ADMIN_EMAIL', 'admin@example.com')
-
-    User = get_user_model()
-
-    try:
-        user, created = User.objects.get_or_create(
-            username=username,
-            defaults={
-                'email': email,
-                'is_staff': True,
-                'is_superuser': True,
-            },
-        )
-    except (OperationalError, ProgrammingError):
-        return
-
-    changed = created
-    if email and user.email != email:
-        user.email = email
-        changed = True
-    if not user.is_staff:
-        user.is_staff = True
-        changed = True
-    if not user.is_superuser:
-        user.is_superuser = True
-        changed = True
-    if not user.check_password(password):
-        user.set_password(password)
-        changed = True
-
-    if changed:
-        user.save()
 
 # ==========================================
 # 模型结构定义（必须与训练时完全一致）
@@ -262,7 +216,6 @@ class LoginAppConfig(AppConfig):
     def ready(self):
         self._reset_runtime_state()
         self._prepare_runtime_dirs()
-        post_migrate.connect(ensure_default_dev_superuser, sender=self, dispatch_uid="fruit_api.ensure_default_dev_superuser")
 
         # Management commands such as migrate/createsuperuser should not depend
         # on AI model files or third-party runtime side effects.

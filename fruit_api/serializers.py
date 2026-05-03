@@ -324,12 +324,9 @@ class MeasurePointSerializer(serializers.Serializer):
 
 
 class MeasureInferSerializer(serializers.Serializer):
+    FORBIDDEN_FIELDS = ("left_image_path", "right_image_path", "calib_path", "ckpt_path")
     left_image = serializers.ImageField(required=False)
     right_image = serializers.ImageField(required=False)
-    left_image_path = serializers.CharField(required=False, allow_blank=False)
-    right_image_path = serializers.CharField(required=False, allow_blank=False)
-    calib_path = serializers.CharField(required=False, allow_blank=False)
-    ckpt_path = serializers.CharField(required=False, allow_blank=False)
     valid_iters = serializers.IntegerField(required=False, min_value=1, max_value=128, default=16)
     save_color = serializers.BooleanField(required=False, default=True)
     save_npy = serializers.BooleanField(required=False, default=True)
@@ -338,31 +335,21 @@ class MeasureInferSerializer(serializers.Serializer):
     detect_conf = serializers.FloatField(required=False, min_value=0.01, max_value=1.0, default=0.25)
 
     def validate(self, attrs):
+        forbidden = [field for field in self.FORBIDDEN_FIELDS if field in self.initial_data]
+        if forbidden:
+            raise serializers.ValidationError(
+                {field: "已禁用本地路径输入，请改为上传双目图片文件。" for field in forbidden}
+            )
         left_file = attrs.get("left_image")
         right_file = attrs.get("right_image")
-        left_path = attrs.get("left_image_path")
-        right_path = attrs.get("right_image_path")
-
-        has_files = left_file is not None or right_file is not None
-        has_paths = bool(left_path or right_path)
-
-        if has_files and has_paths:
-            raise serializers.ValidationError("left/right 图像只能选择一种输入方式：上传文件或本地路径。")
-        if has_files:
-            if left_file is None or right_file is None:
-                raise serializers.ValidationError("上传模式下必须同时提供 left_image 和 right_image。")
-            return attrs
-        if has_paths:
-            if not left_path or not right_path:
-                raise serializers.ValidationError("路径模式下必须同时提供 left_image_path 和 right_image_path。")
-            return attrs
-        raise serializers.ValidationError("请提供 left_image + right_image，或 left_image_path + right_image_path。")
+        if left_file is None or right_file is None:
+            raise serializers.ValidationError("上传模式下必须同时提供 left_image 和 right_image。")
+        return attrs
 
 
 class MeasureDistanceSerializer(serializers.Serializer):
-    inference_id = serializers.CharField(required=False, allow_blank=False)
-    disp_npy_path = serializers.CharField(required=False, allow_blank=False)
-    calib_path = serializers.CharField(required=False, allow_blank=False)
+    FORBIDDEN_FIELDS = ("disp_npy_path", "calib_path")
+    inference_id = serializers.CharField(required=True, allow_blank=False)
     point1 = MeasurePointSerializer(required=False)
     point2 = MeasurePointSerializer(required=False)
     patch_size = serializers.IntegerField(required=False, min_value=1, max_value=51, default=5)
@@ -375,11 +362,11 @@ class MeasureDistanceSerializer(serializers.Serializer):
     return_debug = serializers.BooleanField(required=False, default=False)
 
     def validate(self, attrs):
-        inference_id = attrs.get("inference_id")
-        disp_npy_path = attrs.get("disp_npy_path")
-        if not inference_id and not disp_npy_path:
-            raise serializers.ValidationError("请提供 inference_id 或 disp_npy_path。")
-
+        forbidden = [field for field in self.FORBIDDEN_FIELDS if field in self.initial_data]
+        if forbidden:
+            raise serializers.ValidationError(
+                {field: "已禁用本地路径输入，请改为使用 inference_id。" for field in forbidden}
+            )
         has_points = attrs.get("point1") is not None or attrs.get("point2") is not None
         has_bbox = attrs.get("bbox") is not None
         has_target_mode = attrs.get("measure_all_targets") or attrs.get("target_index") is not None
@@ -393,11 +380,7 @@ class MeasureDistanceSerializer(serializers.Serializer):
             return attrs
 
         if has_target_mode:
-            if not inference_id:
-                raise serializers.ValidationError("按 YOLO 框测量时必须提供 inference_id。")
             return attrs
 
         attrs["measure_all_targets"] = True
-        if not inference_id:
-            raise serializers.ValidationError("默认按 YOLO 框测量时必须提供 inference_id。")
         return attrs

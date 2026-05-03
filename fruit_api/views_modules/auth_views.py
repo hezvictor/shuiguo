@@ -1,6 +1,6 @@
 from django.conf import settings
 from django.contrib.auth import login, logout
-from django.views.decorators.csrf import csrf_exempt, ensure_csrf_cookie
+from django.views.decorators.csrf import csrf_protect, ensure_csrf_cookie
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
@@ -24,7 +24,7 @@ def csrf_cookie_view(_request):
     return Response({"status": "success", "message": "CSRF cookie ready"})
 
 
-@csrf_exempt
+@csrf_protect
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def register_view(request):
@@ -51,7 +51,7 @@ def register_view(request):
         return Response({"status": "error", "error": str(exc)}, status=500)
 
 
-@csrf_exempt
+@csrf_protect
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login_view(request):
@@ -122,3 +122,7 @@ def change_password(request):
 @permission_classes([IsAuthenticated])
 def get_user_info(request):
     return Response(user_to_dto(request.user).to_dict())
+
+
+register_view.csrf_exempt = False
+api_login_view.csrf_exempt = False

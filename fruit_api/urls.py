@@ -60,13 +60,6 @@ urlpatterns = [
                 path('camera/measure/', views.camera_measure_current, name='camera_measure_current'),
                 path('measure/runtime-status/', views.measure_runtime_status, name='measure_runtime_status'),
 
-                # Video
-                path('video/upload/', views.video_upload, name='video_upload'),
-                path('video/progress/<str:task_id>/', views.video_progress, name='video_progress'),
-                path('video/download/<str:task_id>/', views.video_download, name='video_download'),
-                path('video/cleanup/<str:task_id>/', views.video_cleanup, name='video_cleanup'),
-                path('video/report/<str:task_id>/', views.video_report, name='video_report'),
-
                 # Console
                 path('console/overview/', views.console_overview, name='console_overview'),
                 path('console/recent/', views.console_recent, name='console_recent'),

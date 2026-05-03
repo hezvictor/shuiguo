@@ -41,6 +41,10 @@ def _get_preview_manager():
 
 class FruitRecognitionConsumer(AsyncWebsocketConsumer):
     async def connect(self):
+        user = self.scope.get("user")
+        if user is None or not user.is_authenticated:
+            await self.close(code=4401)
+            return
         await self.accept()
         print("WebSocket connected")
 

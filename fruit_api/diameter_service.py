@@ -256,7 +256,7 @@ class FruitDiameterService:
 
     @staticmethod
     def _parse_calibration(npz_path: Path) -> Dict[str, Any]:
-        z = np.load(str(npz_path), allow_pickle=True)
+        z = np.load(str(npz_path), allow_pickle=False)
         kl = z["KL"]
         dl = z["DL"]
         kr = z["KR"]

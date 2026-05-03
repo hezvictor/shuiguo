@@ -63,16 +63,6 @@ from fruit_api.views_modules.history_views import (  # noqa: F401
 )
 from fruit_api.views_modules.realtime_views import save_realtime_report  # noqa: F401
 from fruit_api.views_modules.realtime_runtime_views import realtime_detect_current_frame  # noqa: F401
-from fruit_api.views_modules.video_views import (  # noqa: F401
-    VideoTask,
-    process_video_task,
-    video_cleanup,
-    video_download,
-    video_progress,
-    video_report,
-    video_tasks,
-    video_upload,
-)
 
 __all__ = [
     'register_view',
@@ -116,14 +106,6 @@ __all__ = [
     'measure_fruit_diameter',
     'DetectionHistoryListView',
     'DetectionHistoryDetailView',
-    'VideoTask',
-    'process_video_task',
-    'video_tasks',
-    'video_upload',
-    'video_progress',
-    'video_download',
-    'video_cleanup',
-    'video_report',
     'save_realtime_report',
     'realtime_detect_current_frame',
 ]

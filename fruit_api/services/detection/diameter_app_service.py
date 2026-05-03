@@ -19,6 +19,20 @@ class DiameterExecutionError(Exception):
 
 
 _diameter_service = None
+_PRIVATE_MEASURE_KEYS = {
+    "annotated_image_path",
+    "calib_path",
+    "ckpt_path",
+    "csv_path",
+    "detect_vis_path",
+    "disp_npy_path",
+    "disp_vis_path",
+    "left_image_path",
+    "rectified_left_path",
+    "rectified_right_path",
+    "result_json_path",
+    "right_image_path",
+}
 
 
 def get_diameter_service():
@@ -34,7 +48,23 @@ def reset_diameter_service() -> None:
 
 
 def get_measure_runtime_status() -> Dict:
-    return get_diameter_service().runtime.status()
+    payload = dict(get_diameter_service().runtime.status())
+    checkpoint_path = payload.pop("checkpoint_path", None)
+    if checkpoint_path:
+        payload["checkpoint_file"] = Path(checkpoint_path).name
+    return payload
+
+
+def _sanitize_measure_payload(value):
+    if isinstance(value, dict):
+        return {
+            key: _sanitize_measure_payload(item)
+            for key, item in value.items()
+            if key not in _PRIVATE_MEASURE_KEYS
+        }
+    if isinstance(value, list):
+        return [_sanitize_measure_payload(item) for item in value]
+    return value
 
 
 def _save_history(user, payload: Dict) -> None:
@@ -57,13 +87,14 @@ def _save_history(user, payload: Dict) -> None:
 
 def run_measure_inference(*, yolo_model, **kwargs) -> Dict:
     try:
-        return get_diameter_service().run_inference(yolo_model=yolo_model, **kwargs)
+        payload = get_diameter_service().run_inference(yolo_model=yolo_model, **kwargs)
     except FileNotFoundError as exc:
         raise DiameterDependencyError(str(exc)) from exc
     except ValueError as exc:
         raise DiameterParamError(str(exc)) from exc
     except Exception as exc:
         raise DiameterExecutionError(str(exc)) from exc
+    return _sanitize_measure_payload(payload)
 
 
 def run_measure_distance(*, user=None, save_history: bool = False, **kwargs) -> Dict:
@@ -78,7 +109,7 @@ def run_measure_distance(*, user=None, save_history: bool = False, **kwargs) -> 
 
     if save_history and user is not None:
         _save_history(user, payload)
-    return payload
+    return _sanitize_measure_payload(payload)
 
 
 def measure_and_save_history(
@@ -121,7 +152,7 @@ def measure_and_save_history(
         },
         report_file=payload.get("visualization_file"),
     )
-    return payload
+    return _sanitize_measure_payload(payload)
 
 
 def _relative_media_path(path_str: Optional[str]) -> Optional[str]:
