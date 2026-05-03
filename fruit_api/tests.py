@@ -605,32 +605,10 @@ class ImageDetectionTaskApiTests(APITestCase):
         mock_get_app_config.return_value = mock_app_cfg
 
         measure_service = Mock()
-        measure_service.run_full_measurement.return_value = {
-            'status': 'success',
-            'message': '果径测量完成',
-            'measurement': {
-                'targets': [
-                    {
-                        'label': 'fruit',
-                        'confidence': 0.95,
-                        'bbox': [1, 1, 10, 10],
-                        'distance': 66.2,
-                        'distance_unit': 'mm',
-                        'distance_mm': 66.2,
-                        'point1': {'x': 1, 'y': 5},
-                        'point2': {'x': 10, 'y': 5},
-                        'status': 'ok',
-                    }
-                ],
-                'result_json_path': None,
-                'csv_path': None,
-            },
-            'inference': {'rectified_left_path': None},
+        measure_service.run_inference.return_value = {'inference_id': 'infer-image-task'}
+        measure_service.measure_distance.return_value = {
             'targets': [
                 {
-                    'label': 'fruit',
-                    'confidence': 0.95,
-                    'bbox': [1, 1, 10, 10],
                     'distance': 66.2,
                     'distance_unit': 'mm',
                     'distance_mm': 66.2,
@@ -638,11 +616,7 @@ class ImageDetectionTaskApiTests(APITestCase):
                     'point2': {'x': 10, 'y': 5},
                     'status': 'ok',
                 }
-            ],
-            'total_targets': 1,
-            'valid_measurements': 1,
-            'statistics': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
-            'visualization_file': None,
+            ]
         }
 
         media_root = os.path.join(settings.BASE_DIR, 'media', 'test_image_task_api_e2e')
@@ -1898,6 +1872,70 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
+
+    def test_create_image_detection_task_diameter_group_uses_mixed_style_measurement_pipeline(self):
+        media_root = os.path.join(settings.BASE_DIR, 'media', 'test_diameter_group_alignment')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        measure_service = Mock()
+        measure_service.run_inference.return_value = {'inference_id': 'infer-dual-1'}
+        measure_service.measure_distance.return_value = {
+            'targets': [
+                {
+                    'distance': 6.62,
+                    'distance_unit': 'cm',
+                    'distance_mm': 66.2,
+                    'point1': {'x': 12, 'y': 24},
+                    'point2': {'x': 30, 'y': 24},
+                    'status': 'ok',
+                }
+            ]
+        }
+        image_bytes = self._image_bytes_with_size(color=(20, 30, 40))
+
+        try:
+            with override_settings(MEDIA_ROOT=media_root), patch(
+                'fruit_api.services.detection.image_batch_service.yolo_targets',
+                return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
+            ), patch(
+                'fruit_api.services.detection.image_batch_service.get_diameter_service',
+                return_value=measure_service,
+            ), patch(
+                'fruit_api.services.detection.image_batch_service.DetectionHistory.objects.create',
+                side_effect=lambda **kwargs: SimpleNamespace(**kwargs),
+            ):
+                history = create_image_detection_task(
+                    user=Mock(),
+                    standard_images=[],
+                    diameter_groups=[
+                        {
+                            'label': 'group1',
+                            'left_name': 'group1_left.png',
+                            'right_name': 'group1_right.png',
+                            'left_content': image_bytes,
+                            'right_content': image_bytes,
+                            'input_source': 'zip_archive',
+                            'archive_name': 'diameter.zip',
+                            'archive_path': 'group1',
+                        }
+                    ],
+                    options={
+                        'detect_classification': False,
+                        'detect_ripeness': False,
+                        'detect_diameter': True,
+                    },
+                    app_config=SimpleNamespace(yolo_model=Mock()),
+                )
+                annotated_path = os.path.join(media_root, history.detail_data['items'][0]['annotated_image'].replace('/', os.sep))
+                annotated_image = Image.open(annotated_path).convert('RGB')
+                line_pixel = annotated_image.getpixel((21, 24))
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+        self.assertGreater(line_pixel[0], line_pixel[1])
+        self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
+        self.assertIsNone(history.detail_data['items'][0]['targets'][0]['classification'])
 
     def test_realtime_hybrid_annotates_diameter_on_result_image(self):
         media_root = os.path.join(settings.BASE_DIR, 'media', 'test_realtime_hybrid_annotations')
