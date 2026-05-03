@@ -11,6 +11,7 @@ from typing import Dict, Generator, List, Optional, Tuple
 
 import numpy as np
 from PIL import Image
+from fruit_api.services.detection.yolo_service import draw_yolo_targets_on_bgr, predict_yolo_targets_from_bgr
 
 
 class CameraDependencyError(Exception):
@@ -324,36 +325,14 @@ class StereoCameraService:
 
     @staticmethod
     def _draw_detections(frame: np.ndarray, yolo_model, conf: float) -> None:
-        cv2 = _require_cv2()
-        results = yolo_model.predict(
-            source=Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)),
+        targets = predict_yolo_targets_from_bgr(
+            yolo_model=yolo_model,
+            image_bgr=frame,
             conf=conf,
-            save=False,
-            verbose=False,
+            translate_labels=False,
         )
-        if not results:
-            return
-        result = results[0]
-        boxes = result.boxes
-        if boxes is None or len(boxes) == 0:
-            return
-
-        for index, box in enumerate(boxes):
-            x1, y1, x2, y2 = [int(v) for v in box.xyxy[0].tolist()]
-            cls_id = int(box.cls[0].item())
-            label = result.names.get(cls_id, str(cls_id))
-            score = float(box.conf[0].item())
-            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(
-                frame,
-                f"{index + 1}. {label} {score:.2f}",
-                (x1, max(24, y1 - 8)),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.6,
-                (0, 255, 0),
-                2,
-                cv2.LINE_AA,
-            )
+        annotated = draw_yolo_targets_on_bgr(frame, targets)
+        frame[:, :] = annotated
 
     def open(self, config: Optional[StereoCameraConfig] = None) -> Dict:
         effective = config or self._default_config

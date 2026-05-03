@@ -214,6 +214,7 @@ def create_image_detection_task_view(request):
                 "detect_diameter": bool(diameter_groups),
             },
             app_config=app_config,
+            run_async=True,
         )
     except Exception as exc:
         return error_response(f"图片检测任务执行失败: {exc}", http_status=status.HTTP_500_INTERNAL_SERVER_ERROR)

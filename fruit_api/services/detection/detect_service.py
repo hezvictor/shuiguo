@@ -11,6 +11,19 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 from django.conf import settings
+from fruit_api.services.label_map_service import (
+    translate_label_map,
+    translate_nested_ripeness_counts,
+    translate_ripeness_probabilities,
+    translate_ripeness_label,
+)
+from fruit_api.services.detection.yolo_service import (
+    draw_yolo_targets_on_bgr,
+    encode_bgr_jpeg_bytes,
+    pil_rgb_to_bgr,
+    predict_yolo_result,
+    yolo_result_to_targets,
+)
 
 
 class DetectServiceError(Exception):
@@ -45,11 +58,12 @@ def classify_fruit_crop(img: Image.Image, app_config) -> Dict:
 
     probabilities = F.softmax(output, dim=1)[0]
     predicted_idx = torch.argmax(probabilities).item()
-    predicted_label = app_config.fruit_class_names[predicted_idx]
+    predicted_label_en = app_config.fruit_class_names[predicted_idx]
     predicted_probability = probabilities[predicted_idx].item()
 
     return {
-        'predicted_class': predicted_label,
+        'predicted_class': translate_fruit_label(predicted_label_en),
+        'predicted_class_en': predicted_label_en,
         'confidence': predicted_probability,
     }
 
@@ -57,12 +71,14 @@ def classify_fruit_crop(img: Image.Image, app_config) -> Dict:
 def classify_with_ripeness(img: Image.Image, app_config) -> Dict:
     fruit_result = classify_fruit_crop(img, app_config)
     fruit_label = fruit_result['predicted_class']
+    fruit_label_en = fruit_result.get('predicted_class_en', fruit_label)
 
-    ripeness_result = classify_ripeness_for_fruit_crop(img, fruit_label, app_config)
+    ripeness_result = classify_ripeness_for_fruit_crop(img, fruit_label_en, app_config)
     if ripeness_result is None:
         return {
             'status': 'success',
             'fruit_type': fruit_label,
+            'fruit_type_en': fruit_label_en,
             'message': '该水果无需熟度检测',
             'predicted_class': fruit_label,
             'confidence': fruit_result['confidence'],
@@ -97,11 +113,13 @@ def classify_ripeness_by_type(img: Image.Image, fruit_type: str, app_config) -> 
 
     return {
         'status': 'success',
-        'fruit_type': fruit_type,
+        'fruit_type': translate_fruit_label(fruit_type),
+        'fruit_type_en': fruit_type,
         'ripeness_result': {
-            'predicted_class': classes[idx],
+            'predicted_class': translate_ripeness_label(classes[idx]),
+            'predicted_class_en': classes[idx],
             'confidence': conf.item(),
-            'probabilities': prob_dict,
+            'probabilities': translate_ripeness_probabilities(prob_dict),
         },
     }
 
@@ -118,53 +136,37 @@ def classify_ripeness_for_fruit_crop(img: Image.Image, fruit_label: str, app_con
     ripe_probs = F.softmax(ripe_output, dim=1)[0]
     ripe_conf, ripe_idx = torch.max(ripe_probs, 0)
     return {
-        'predicted_class': classes[ripe_idx],
+        'predicted_class': translate_ripeness_label(classes[ripe_idx]),
+        'predicted_class_en': classes[ripe_idx],
         'confidence': ripe_conf.item(),
-        'probabilities': {name: ripe_probs[i].item() for i, name in enumerate(classes)},
+        'probabilities': translate_ripeness_probabilities({name: ripe_probs[i].item() for i, name in enumerate(classes)}),
     }
 
 
 def yolo_boxes_image_bytes(img: Image.Image, app_config, conf: float = 0.25) -> bytes:
-    result = run_yolo_prediction(img, app_config, conf=conf)
-    boxes = result.boxes
-
-    img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-    if boxes is not None and len(boxes) > 0:
-        for box in boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            score = box.conf[0].item()
-            cls = int(box.cls[0].item())
-            label = f"{result.names[cls]} {score:.2f}"
-            cv2.rectangle(img_cv, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(img_cv, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
-
-    img_rgb = cv2.cvtColor(img_cv, cv2.COLOR_BGR2RGB)
-    pil_img = Image.fromarray(img_rgb)
-    img_io = io.BytesIO()
-    pil_img.save(img_io, format='JPEG')
-    img_io.seek(0)
-    return img_io.read()
+    targets = yolo_targets(img, app_config, conf=conf)
+    annotated = draw_yolo_targets_on_bgr(pil_rgb_to_bgr(img), targets)
+    return encode_bgr_jpeg_bytes(annotated)
 
 
 def yolo_targets(img: Image.Image, app_config, conf: float = 0.25) -> List[Dict]:
     result = run_yolo_prediction(img, app_config, conf=conf)
-    boxes = result.boxes
-
-    targets: List[Dict] = []
-    if boxes is not None and len(boxes) > 0:
-        for box in boxes:
-            x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-            score = box.conf[0].item()
-            cls = int(box.cls[0].item())
-            label = result.names[cls]
-            targets.append({'bbox': [x1, y1, x2, y2], 'label': label, 'confidence': score})
-    return targets
+    return [
+        {
+            'bbox': target['bbox'],
+            'label': target['label'],
+            'confidence': target['confidence'],
+        }
+        for target in yolo_result_to_targets(result, translate_labels=True)
+    ]
 
 
 def run_yolo_prediction(img: Image.Image, app_config, conf: float = 0.25):
-    yolo_model = app_config.yolo_model
-    results = yolo_model.predict(source=img, conf=conf, save=False, verbose=False)
-    return results[0]
+    return predict_yolo_result(
+        yolo_model=app_config.yolo_model,
+        image=img,
+        conf=conf,
+    )
 
 
 def parse_selected_indices(raw: Optional[str]) -> Optional[List[int]]:
@@ -194,8 +196,9 @@ def build_report_data(img: Image.Image, app_config, selected_indices: Optional[L
 
             fruit_result = classify_fruit_crop(cropped_img, app_config)
             fruit_label = fruit_result['predicted_class']
+            fruit_label_en = fruit_result.get('predicted_class_en', fruit_label)
             fruit_confidence = fruit_result['confidence']
-            ripeness_result = classify_ripeness_for_fruit_crop(cropped_img, fruit_label, app_config)
+            ripeness_result = classify_ripeness_for_fruit_crop(cropped_img, fruit_label_en, app_config)
 
             targets.append(
                 {
@@ -217,8 +220,8 @@ def build_report_data(img: Image.Image, app_config, selected_indices: Optional[L
     report_data = {'total_targets': len(targets), 'targets': targets}
     summary = {
         'total_targets': len(targets),
-        'fruit_counts': dict(fruit_counts),
-        'ripeness_counts': {k: dict(v) for k, v in ripeness_counts.items()},
+        'fruit_counts': translate_label_map(dict(fruit_counts), label_type='fruit'),
+        'ripeness_counts': translate_nested_ripeness_counts({k: dict(v) for k, v in ripeness_counts.items()}),
     }
 
     return {'report_data': report_data, 'targets': targets, 'summary': summary}

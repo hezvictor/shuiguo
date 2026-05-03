@@ -6,6 +6,7 @@ from typing import Dict
 from django.conf import settings
 
 from fruit_api.models import DetectionHistory
+from fruit_api.services.label_map_service import translate_label_map, translate_nested_ripeness_counts
 
 
 class RealtimePayloadError(Exception):
@@ -22,8 +23,8 @@ def validate_realtime_payload(data: Dict) -> None:
 def build_realtime_summary(data: Dict) -> Dict:
     summary = {
         'total_targets': int(data.get('total_targets') or 0),
-        'fruit_counts': data.get('fruit_counts') or {},
-        'ripeness_counts': data.get('ripeness_counts') or {},
+        'fruit_counts': translate_label_map(data.get('fruit_counts') or {}, label_type='fruit'),
+        'ripeness_counts': translate_nested_ripeness_counts(data.get('ripeness_counts') or {}),
     }
     for key in [
         'mode',

@@ -6,6 +6,7 @@ import tempfile
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone as dt_timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -483,6 +484,7 @@ class ImageDetectionTaskApiTests(APITestCase):
         self.assertTrue(history.report_file.endswith('.xlsx'))
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter'], None)
 
+    @override_settings(IMAGE_TASK_RUN_INLINE=True)
     @patch('fruit_api.views_modules.detect_views.apps.get_app_config')
     def test_create_image_detection_task_zip_inputs_end_to_end(self, mock_get_app_config):
         mock_app_cfg = Mock()
@@ -1502,6 +1504,17 @@ class ExceptionHandlerTests(SimpleTestCase):
 
 
 class ServiceUnitTests(SimpleTestCase):
+    def _workspace_tempdir(self):
+        root = Path(settings.BASE_DIR) / 'test_media' / 'unit_tmp'
+        root.mkdir(parents=True, exist_ok=True)
+        return tempfile.TemporaryDirectory(dir=root)
+
+    def _workspace_case_dir(self, name: str) -> Path:
+        root = Path(settings.BASE_DIR) / 'test_media' / 'unit_cases' / name
+        shutil.rmtree(root, ignore_errors=True)
+        root.mkdir(parents=True, exist_ok=True)
+        return root
+
     def _image_bytes(self, color=(120, 160, 200)):
         buffer = io.BytesIO()
         Image.new('RGB', (8, 8), color=color).save(buffer, format='PNG')
@@ -1523,6 +1536,358 @@ class ServiceUnitTests(SimpleTestCase):
     def test_parse_selected_indices_invalid_json(self):
         with self.assertRaises(InvalidParamError):
             parse_selected_indices('not-json')
+
+    def test_choose_preferred_detection_side_prefers_color_image(self):
+        from fruit_api.services.detection.yolo_service import choose_preferred_detection_side
+
+        gray_left = np.full((8, 8, 3), 128, dtype=np.uint8)
+        color_right = np.zeros((8, 8, 3), dtype=np.uint8)
+        color_right[:, :, 1] = 180
+        color_right[:, :, 2] = 40
+
+        payload = choose_preferred_detection_side(gray_left, color_right)
+
+        self.assertEqual(payload['preferred_side'], 'right')
+        self.assertTrue(payload['left_profile']['is_grayscale'])
+        self.assertFalse(payload['right_profile']['is_grayscale'])
+
+    def test_fruit_diameter_inference_uses_original_left_image_for_yolo(self):
+        from fruit_api.diameter_service import FruitDiameterService, MeasureConfig, RectifyContext
+
+        root = self._workspace_case_dir('diameter_left_yolo')
+        calib_path = root / 'calib.npz'
+        ckpt_path = root / 'model.pth'
+        calib_path.write_bytes(b'calib')
+        ckpt_path.write_bytes(b'ckpt')
+
+        service = FruitDiameterService(
+            MeasureConfig(
+                monster_dir=root,
+                calib_npz=calib_path,
+                restore_ckpt=ckpt_path,
+                output_dir=root / 'output',
+            )
+        )
+
+        left_bgr = np.zeros((6, 6, 3), dtype=np.uint8)
+        left_bgr[0, 0] = [1, 2, 3]
+        right_bgr = np.zeros((6, 6, 3), dtype=np.uint8)
+        rectified_left_bgr = np.zeros((6, 6, 3), dtype=np.uint8)
+        rectified_left_bgr[0, 0] = [9, 8, 7]
+        rectified_right_bgr = np.zeros((6, 6, 3), dtype=np.uint8)
+
+        rectify_context = RectifyContext(
+            left_maps=(np.zeros((6, 6), dtype=np.float32), np.zeros((6, 6), dtype=np.float32)),
+            right_maps=(np.zeros((6, 6), dtype=np.float32), np.zeros((6, 6), dtype=np.float32)),
+            q=np.eye(4, dtype=np.float32),
+            kl=np.eye(3, dtype=np.float64),
+            dl=np.zeros((5, 1), dtype=np.float64),
+            kr=np.eye(3, dtype=np.float64),
+            dr=np.zeros((5, 1), dtype=np.float64),
+            r1=np.eye(3, dtype=np.float64),
+            r2=np.eye(3, dtype=np.float64),
+            p1=np.hstack([np.eye(3, dtype=np.float64), np.zeros((3, 1), dtype=np.float64)]),
+            p2=np.hstack([np.eye(3, dtype=np.float64), np.zeros((3, 1), dtype=np.float64)]),
+            size=(6, 6),
+        )
+
+        class FakeBox:
+            def __init__(self):
+                self.xyxy = np.array([[1, 1, 4, 4]], dtype=np.float32)
+                self.cls = np.array([0], dtype=np.float32)
+                self.conf = np.array([0.91], dtype=np.float32)
+
+        class FakeResult:
+            def __init__(self):
+                self.boxes = [FakeBox()]
+                self.names = {0: 'apple'}
+
+        class FakeYolo:
+            def __init__(self):
+                self.seen_source_rgb = None
+
+            def predict(self, **kwargs):
+                self.seen_source_rgb = np.array(kwargs['source'])[0, 0].tolist()
+                return [FakeResult()]
+
+        fake_yolo = FakeYolo()
+
+        with patch.object(service, '_resolve_image', side_effect=[(left_bgr, 'left.png'), (right_bgr, 'right.png')]):
+            with patch.object(service, '_load_calibration', return_value={'summary': {'baseline': 60.0}}):
+                with patch.object(service, '_get_rectify_context', return_value=rectify_context):
+                    with patch('fruit_api.diameter_service.cv2.remap', side_effect=[rectified_left_bgr, rectified_right_bgr]):
+                        with patch.object(
+                            service,
+                            '_infer_disparity_with_fallback',
+                            return_value=(np.ones((6, 6), dtype=np.float32), 'cpu', False, None),
+                        ):
+                            with patch.object(service, '_map_bbox_to_rectified', return_value=[2, 2, 5, 5]):
+                                payload = service.run_inference(
+                                    yolo_model=fake_yolo,
+                                    left_image_path='left.png',
+                                    right_image_path='right.png',
+                                    save_color=False,
+                                )
+
+            self.assertEqual(fake_yolo.seen_source_rgb, [3, 2, 1])
+            self.assertEqual(payload['detections'][0]['bbox'], [1, 1, 4, 4])
+            self.assertEqual(payload['measurement_detections'][0]['bbox'], [2, 2, 5, 5])
+
+    def test_fruit_diameter_inference_can_fallback_to_right_detection(self):
+        from fruit_api.diameter_service import FruitDiameterService, MeasureConfig, RectifyContext
+
+        root = self._workspace_case_dir('diameter_right_fallback')
+        calib_path = root / 'calib.npz'
+        ckpt_path = root / 'model.pth'
+        calib_path.write_bytes(b'calib')
+        ckpt_path.write_bytes(b'ckpt')
+
+            service = FruitDiameterService(
+                MeasureConfig(
+                    monster_dir=root,
+                    calib_npz=calib_path,
+                    restore_ckpt=ckpt_path,
+                    output_dir=root / 'output',
+                )
+            )
+
+            left_bgr = np.full((8, 8, 3), 120, dtype=np.uint8)
+            right_bgr = np.zeros((8, 8, 3), dtype=np.uint8)
+            right_bgr[:, :, 1] = 180
+            right_bgr[:, :, 2] = 30
+            rectified_left_bgr = left_bgr.copy()
+            rectified_right_bgr = right_bgr.copy()
+
+            rectify_context = RectifyContext(
+                left_maps=(np.zeros((8, 8), dtype=np.float32), np.zeros((8, 8), dtype=np.float32)),
+                right_maps=(np.zeros((8, 8), dtype=np.float32), np.zeros((8, 8), dtype=np.float32)),
+                q=np.eye(4, dtype=np.float32),
+                kl=np.eye(3, dtype=np.float64),
+                dl=np.zeros((5, 1), dtype=np.float64),
+                kr=np.eye(3, dtype=np.float64),
+                dr=np.zeros((5, 1), dtype=np.float64),
+                r1=np.eye(3, dtype=np.float64),
+                r2=np.eye(3, dtype=np.float64),
+                p1=np.hstack([np.eye(3, dtype=np.float64), np.zeros((3, 1), dtype=np.float64)]),
+                p2=np.hstack([np.eye(3, dtype=np.float64), np.zeros((3, 1), dtype=np.float64)]),
+                size=(8, 8),
+            )
+
+            right_detection = {'index': 0, 'label': 'mango', 'confidence': 0.93, 'bbox': [1, 1, 6, 6]}
+
+            with patch.object(service, '_resolve_image', side_effect=[(left_bgr, 'left.png'), (right_bgr, 'right.png')]):
+                with patch.object(service, '_load_calibration', return_value={'summary': {'baseline': 60.0}}):
+                    with patch.object(service, '_get_rectify_context', return_value=rectify_context):
+                        with patch('fruit_api.diameter_service.cv2.remap', side_effect=[rectified_left_bgr, rectified_right_bgr]):
+                            with patch.object(
+                                service,
+                                '_infer_disparity_with_fallback',
+                                return_value=(np.ones((8, 8), dtype=np.float32), 'cpu', False, None),
+                            ):
+                                with patch.object(service, '_predict_yolo_detections', return_value=[right_detection]) as mock_predict:
+                                    with patch.object(service, '_map_right_bbox_to_rectified', return_value=[1, 1, 6, 6]):
+                                        with patch.object(service, '_refine_left_bbox_from_reference', return_value=[0, 1, 7, 7]):
+                                            payload = service.run_inference(
+                                                yolo_model=Mock(),
+                                                left_image_path='left.png',
+                                                right_image_path='right.png',
+                                                save_color=False,
+                                            )
+
+            self.assertEqual(mock_predict.call_count, 1)
+            self.assertEqual(payload['source_analysis']['preferred_side'], 'right')
+            self.assertEqual(payload['detection_source'], 'right')
+            self.assertEqual(payload['measurement_detections'][0]['bbox'], [0, 1, 7, 7])
+            self.assertEqual(payload['measurement_detections'][0]['classification_source'], 'right')
+
+    def test_measure_distance_prefers_rectified_measurement_detections(self):
+        from fruit_api.diameter_service import FruitDiameterService, MeasureConfig
+
+        root = self._workspace_case_dir('measure_distance_prefers_rectified')
+        calib_path = root / 'calib.npz'
+        ckpt_path = root / 'model.pth'
+        disp_path = root / 'disp.npy'
+        calib_path.write_bytes(b'calib')
+        ckpt_path.write_bytes(b'ckpt')
+        np.save(str(disp_path), np.ones((50, 50), dtype=np.float32))
+
+            service = FruitDiameterService(
+                MeasureConfig(
+                    monster_dir=root,
+                    calib_npz=calib_path,
+                    restore_ckpt=ckpt_path,
+                    output_dir=root / 'output',
+                )
+            )
+            service._job_dir('infer-1').mkdir(parents=True, exist_ok=True)
+
+            manifest = {
+                'disp_npy_path': str(disp_path),
+                'calib_path': str(calib_path),
+                'measurement_detections': [
+                    {'index': 0, 'label': 'apple', 'confidence': 0.9, 'bbox': [10, 20, 30, 40]},
+                ],
+                'detections': [
+                    {'index': 0, 'label': 'apple', 'confidence': 0.9, 'bbox': [1, 2, 3, 4]},
+                ],
+            }
+
+            with patch.object(service, '_load_manifest', return_value=manifest):
+                with patch.object(service, '_read_disp', return_value=np.ones((50, 50), dtype=np.float32)):
+                    with patch.object(service, '_get_rectify_context', return_value=SimpleNamespace(q=np.eye(4, dtype=np.float32))):
+                        with patch.object(
+                            service,
+                            '_measure_points',
+                            return_value={
+                                'distance_mm': 25.0,
+                                'point1': {'x': 10, 'y': 30, 'disp': 1.0, 'depth_m': 1.0, 'point_3d': {'X': 0.0, 'Y': 0.0, 'Z': 1.0}},
+                                'point2': {'x': 30, 'y': 30, 'disp': 1.0, 'depth_m': 1.0, 'point_3d': {'X': 0.025, 'Y': 0.0, 'Z': 1.0}},
+                            },
+                        ) as mock_measure_points:
+                            payload = service.measure_distance(
+                                inference_id='infer-1',
+                                save_annotated=False,
+                                measure_all_targets=True,
+                            )
+
+            _, _, point1, point2, _ = mock_measure_points.call_args.args
+            self.assertEqual(point1, {'x': 10, 'y': 30})
+            self.assertEqual(point2, {'x': 30, 'y': 30})
+            self.assertEqual(payload['targets'][0]['bbox'], [10, 20, 30, 40])
+            self.assertEqual(payload['targets'][0]['distance'], 25.0)
+
+    def test_build_measurement_item_uses_right_image_for_right_side_classification(self):
+        from fruit_api.services.detection.image_batch_service import _build_measurement_item
+
+        root = self._workspace_case_dir('measurement_item_right_source')
+        left_path = root / 'left.png'
+        right_path = root / 'right.png'
+        Image.new('RGB', (10, 10), color=(120, 120, 120)).save(left_path)
+        Image.new('RGB', (10, 10), color=(220, 30, 20)).save(right_path)
+
+            payload = {
+                'measurement': {
+                    'targets': [
+                        {
+                            'index': 0,
+                            'label': 'mango',
+                            'confidence': 0.91,
+                            'bbox': [1, 1, 8, 8],
+                            'classification_source': 'right',
+                            'classification_bbox': [1, 1, 8, 8],
+                            'source_bbox': [1, 1, 8, 8],
+                            'distance': 55.0,
+                            'distance_unit': 'mm',
+                            'distance_mm': 55.0,
+                            'status': 'ok',
+                        }
+                    ],
+                },
+                'inference': {
+                    'left_image_path': str(left_path),
+                    'right_image_path': str(right_path),
+                    'rectified_left_path': str(left_path),
+                    'detections': [{'index': 0, 'bbox': [1, 1, 8, 8], 'label': 'mango', 'confidence': 0.91}],
+                },
+                'targets': [],
+                'valid_measurements': 1,
+                'statistics': {'avg_distance_mm': 55.0},
+            }
+
+            seen = {}
+
+            def fake_classify(crop, _app_config):
+                seen['pixel'] = crop.getpixel((0, 0))
+                return {'predicted_class': 'mango', 'predicted_class_en': 'mango', 'confidence': 0.99}
+
+            with patch('fruit_api.services.detection.image_batch_service.classify_fruit_crop', side_effect=fake_classify):
+                with patch('fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop', return_value=None):
+                    item = _build_measurement_item(
+                        payload=payload,
+                        original_left='left.png',
+                        original_right='right.png',
+                        display_name='group-1',
+                        item_type='diameter_group',
+                        metadata={},
+                        options={'classify_diameter_targets': True, 'detect_ripeness': False},
+                        app_config=Mock(),
+                    )
+
+            self.assertEqual(seen['pixel'], (220, 30, 20))
+            self.assertEqual(item['targets'][0]['classification']['class'], 'mango')
+            self.assertEqual(item['targets'][0]['detection']['source'], 'right')
+
+    def test_dual_realtime_detection_uses_right_image_for_right_side_classification(self):
+        from fruit_api.services.detection.realtime_pipeline_service import _run_dual_realtime_detection_from_frames
+
+        root = self._workspace_case_dir('realtime_right_source')
+        left_path = root / 'left.png'
+        right_path = root / 'right.png'
+        Image.new('RGB', (12, 12), color=(100, 100, 100)).save(left_path)
+        Image.new('RGB', (12, 12), color=(15, 210, 25)).save(right_path)
+
+            payload = {
+                'inference': {
+                    'inference_id': 'infer-1',
+                    'left_image_path': str(left_path),
+                    'right_image_path': str(right_path),
+                    'rectified_left_path': str(left_path),
+                    'detections': [{'index': 0, 'bbox': [1, 1, 9, 9], 'label': 'mango', 'confidence': 0.92}],
+                },
+                'targets': [
+                    {
+                        'index': 0,
+                        'label': 'mango',
+                        'confidence': 0.92,
+                        'bbox': [1, 1, 9, 9],
+                        'classification_source': 'right',
+                        'classification_bbox': [1, 1, 9, 9],
+                        'source_bbox': [1, 1, 9, 9],
+                        'distance': 42.0,
+                        'distance_unit': 'mm',
+                        'distance_mm': 42.0,
+                        'status': 'ok',
+                    }
+                ],
+                'total_targets': 1,
+                'valid_measurements': 1,
+                'statistics': {'avg_distance_mm': 42.0},
+                'visualization_file': None,
+                'runtime_device': 'cpu',
+                'runtime_warning': None,
+            }
+
+            diameter_service = Mock()
+            diameter_service.run_full_measurement.return_value = payload
+            diameter_service.cleanup_inference.return_value = None
+
+            seen = {}
+
+            def fake_classify(crop, _app_config):
+                seen['pixel'] = crop.getpixel((0, 0))
+                return {'predicted_class': 'mango', 'predicted_class_en': 'mango', 'confidence': 0.88}
+
+            with patch('fruit_api.services.detection.realtime_pipeline_service.get_diameter_service', return_value=diameter_service):
+                with patch('fruit_api.services.detection.realtime_pipeline_service.classify_fruit_crop', side_effect=fake_classify):
+                    with patch('fruit_api.services.detection.realtime_pipeline_service.classify_ripeness_for_fruit_crop', return_value=None):
+                        with patch('fruit_api.services.detection.realtime_pipeline_service._copy_visualization_to_realtime_frames', return_value='realtime_frames/test.jpg'):
+                            response = _run_dual_realtime_detection_from_frames(
+                                app_config=Mock(),
+                                left_frame=np.zeros((12, 12, 3), dtype=np.uint8),
+                                right_frame=np.zeros((12, 12, 3), dtype=np.uint8),
+                                effective_left=0,
+                                effective_right=1,
+                                conf=0.25,
+                                detect_classification=True,
+                                detect_ripeness=False,
+                                suggested_interval_ms=1000,
+                                frame_source='test',
+                            )
+
+            self.assertEqual(seen['pixel'], (15, 210, 25))
+            self.assertEqual(response['targets'][0]['classification']['class'], 'mango')
+            self.assertEqual(response['targets'][0]['detection']['source'], 'right')
+            diameter_service.cleanup_inference.assert_called_once_with('infer-1')
 
     @patch('fruit_api.services.detection.diameter_app_service.get_diameter_service')
     def test_run_measure_inference_strips_private_paths(self, mock_get_diameter_service):
@@ -1767,6 +2132,59 @@ class ServiceUnitTests(SimpleTestCase):
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
+    @patch('fruit_api.services.camera.capture_service.capture_dual_camera_frames')
+    @patch('fruit_api.services.camera.capture_service.get_camera_registry_service')
+    def test_camera_capture_service_download_single_bundle_returns_direct_group_zip(
+        self,
+        mock_get_registry_service,
+        mock_capture_dual,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_download_bundle')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_get_registry_service.return_value.snapshot.return_value = {
+                'selection': {
+                    'preview_camera_indices': [0, 1],
+                    'single_camera_index': 0,
+                    'dual_left_camera_index': 0,
+                    'dual_right_camera_index': 1,
+                    'backend': '',
+                }
+            }
+            mock_capture_dual.return_value = (
+                np.zeros((24, 24, 3), dtype=np.uint8),
+                np.ones((24, 24, 3), dtype=np.uint8) * 255,
+            )
+
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                capture_payload = service.capture(
+                    user_id=1,
+                    camera_indices=[0, 1],
+                    capture_mode='dual',
+                    persist=False,
+                )
+                stage_id = capture_payload['staged_groups'][0]['stage_id']
+                record = service.save_staged(user_id=1, stage_ids=[stage_id])
+
+                archive = service.build_zip_bytes(user_id=1, record_ids=[record['id']])
+
+                self.assertEqual(archive['file_name'], record['archive_name'])
+                with zipfile.ZipFile(io.BytesIO(archive['content']), 'r') as zip_file:
+                    names = set(zip_file.namelist())
+
+                expected_names = {
+                    f"{group['group_name']}/{file_info['file_name']}"
+                    for group in record['groups']
+                    for file_info in group['files']
+                }
+                self.assertEqual(names, expected_names)
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
     def test_ensure_media_path_rejects_escape(self):
         media_root = os.path.join(settings.BASE_DIR, 'test_media', 'file_lifecycle_escape')
         shutil.rmtree(media_root, ignore_errors=True)
@@ -1945,6 +2363,29 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertEqual(groups[0]['archive_name'], 'camera_captures_1777719490164.zip')
         self.assertEqual(groups[0]['left_name'], '20260502_180402_left.jpg')
         self.assertEqual(groups[0]['right_name'], '20260502_180402_right.jpg')
+
+    def test_resolve_image_detection_inputs_supports_top_level_group_dirs_for_diameter_inputs(self):
+        image_bytes = self._image_bytes()
+
+        singles, groups = resolve_image_detection_inputs(
+            single_inputs=[],
+            diameter_inputs=[
+                self._zip_upload(
+                    'camera_capture_bundle_20260504_000652.zip',
+                    {
+                        '第1组照片_20260504_000652/第1组_left_20260504_000652.jpg': image_bytes,
+                        '第1组照片_20260504_000652/第1组_right_20260504_000652.jpg': image_bytes,
+                        '第2组照片_20260504_000713/第2组_left_20260504_000713.jpg': image_bytes,
+                        '第2组照片_20260504_000713/第2组_right_20260504_000713.jpg': image_bytes,
+                    },
+                )
+            ],
+        )
+
+        self.assertEqual(singles, [])
+        self.assertEqual(len(groups), 2)
+        self.assertEqual(groups[0]['label'], '第1组照片_20260504_000652')
+        self.assertEqual(groups[1]['label'], '第2组照片_20260504_000713')
 
     def test_resolve_image_detection_inputs_rejects_illegal_archive_path(self):
         image_bytes = self._image_bytes()
