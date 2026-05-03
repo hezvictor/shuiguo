@@ -35,11 +35,6 @@ const routes = [
         component: () => import('../views/ImageDetectionView.vue')
       },
       {
-        path: '/detection/video',
-        name: 'videoDetection',
-        component: () => import('../views/VideoDetectionView.vue')
-      },
-      {
         path: '/detection/realtime',
         name: 'realtimeDetection',
         component: () => import('../views/RealtimeDetectionView.vue')

@@ -16,7 +16,7 @@
           >
             <div class="user-avatar-wrapper">
               <el-avatar :size="36" :src="userAvatar" class="user-avatar">
-                <img :src="defaultAvatar" alt="默认头像" />
+                <img :src="defaultAvatar" alt="Default Avatar" />
               </el-avatar>
               <span class="user-name">{{ userName }}</span>
               <el-icon class="dropdown-arrow"><ArrowDown /></el-icon>
@@ -82,11 +82,6 @@
             <span>图片检测</span>
           </el-menu-item>
 
-          <el-menu-item index="/detection/video">
-            <el-icon><VideoPlay /></el-icon>
-            <span>视频检测</span>
-          </el-menu-item>
-
           <el-menu-item index="/detection/realtime">
             <el-icon><Monitor /></el-icon>
             <span>实时检测</span>
@@ -135,8 +130,7 @@ import {
   Search,
   SwitchButton,
   Timer,
-  User,
-  VideoPlay
+  User
 } from '@element-plus/icons-vue'
 
 export default defineComponent({
@@ -152,8 +146,7 @@ export default defineComponent({
     Search,
     SwitchButton,
     Timer,
-    User,
-    VideoPlay
+    User
   },
   setup() {
     const router = useRouter()
@@ -193,7 +186,7 @@ export default defineComponent({
           userAvatar.value = userInfo.avatar
         }
       } catch (error) {
-        console.error('解析用户信息失败', error)
+        console.error('parse user info failed', error)
       }
     }
 
@@ -232,7 +225,7 @@ export default defineComponent({
       try {
         await logoutApi()
       } catch (_error) {
-        // 后端 session 已失效时，仍然清理前端状态。
+        // keep local logout flow even when backend session already expired
       }
 
       clearLoginState()

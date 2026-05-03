@@ -1,29 +1,27 @@
 <template>
-  <div class="history-container">
-    <div class="container">
-      <div class="page-head">
-        <div>
-          <h1>检测历史</h1>
-          <p>查看图片、视频、实时检测和果径测量任务，支持详情回看和报告下载。</p>
-        </div>
+  <div class="history-page">
+    <section class="panel page-head">
+      <div>
+        <h1>检测历史</h1>
+        <p>查看图片检测、实时检测和果径测量结果，支持详情查看、报告下载和记录删除。</p>
       </div>
-
       <div class="toolbar">
-        <el-select v-model="detectionType" placeholder="按类型筛选" clearable style="width: 220px" @change="onFilterChange">
+        <el-select v-model="detectionType" clearable placeholder="按类型筛选" style="width: 180px" @change="onFilterChange">
           <el-option label="全部" value="" />
           <el-option label="图片检测" value="image" />
-          <el-option label="视频检测" value="video" />
           <el-option label="实时检测" value="realtime" />
           <el-option label="果径测量" value="diameter" />
         </el-select>
-        <el-button @click="fetchHistory" :loading="loading">刷新</el-button>
+        <el-button :loading="loading" @click="fetchHistory">刷新</el-button>
       </div>
+    </section>
 
+    <section class="panel">
       <div v-if="loading" class="loading-wrapper">
         <el-skeleton :rows="6" animated />
       </div>
 
-      <el-table v-else :data="historyList" stripe style="width: 100%">
+      <el-table v-else :data="historyList" stripe>
         <el-table-column prop="detection_type_display" label="类型" width="120">
           <template #default="{ row }">
             <el-tag :type="tagType(row.detection_type)">{{ row.detection_type_display }}</el-tag>
@@ -31,14 +29,16 @@
         </el-table-column>
 
         <el-table-column prop="title" label="任务标题" min-width="220">
-          <template #default="{ row }">{{ row.title || `${row.detection_type_display} #${row.id}` }}</template>
+          <template #default="{ row }">
+            {{ row.title || `${row.detection_type_display} #${row.id}` }}
+          </template>
         </el-table-column>
 
         <el-table-column prop="created_at" label="检测时间" width="180">
           <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
         </el-table-column>
 
-        <el-table-column prop="summary" label="摘要信息" min-width="260">
+        <el-table-column prop="summary" label="摘要" min-width="260">
           <template #default="{ row }">
             <div class="summary-text">{{ historySummaryText(row) }}</div>
           </template>
@@ -47,7 +47,14 @@
         <el-table-column label="操作" width="270">
           <template #default="{ row }">
             <el-button type="primary" size="small" @click="viewDetail(row)">查看详情</el-button>
-            <el-button v-if="row.report_file || row.report_url" type="success" size="small" @click="downloadReport(row)">下载报告</el-button>
+            <el-button
+              v-if="row.report_file || row.report_url"
+              type="success"
+              size="small"
+              @click="downloadReport(row)"
+            >
+              下载报告
+            </el-button>
             <el-button type="danger" size="small" @click="deleteHistory(row)">删除</el-button>
           </template>
         </el-table-column>
@@ -60,102 +67,110 @@
         :total="total"
         :current-page="currentPage"
         :page-size="pageSize"
+        class="pagination"
         @current-change="handlePageChange"
-        style="margin-top: 20px; justify-content: center"
       />
+    </section>
 
-      <el-dialog v-model="detailVisible" title="检测详情" width="88%" :close-on-click-modal="false">
-        <div v-if="currentDetail" class="detail-content">
-          <div class="detail-summary">
-            <p><strong>检测类型：</strong>{{ currentDetail.detection_type_display }}</p>
-            <p><strong>任务标题：</strong>{{ currentDetail.title || `${currentDetail.detection_type_display} #${currentDetail.id}` }}</p>
-            <p><strong>检测时间：</strong>{{ formatDateTime(currentDetail.created_at) }}</p>
-            <p><strong>状态：</strong>{{ currentDetail.status_display || currentDetail.status || 'completed' }}</p>
-            <p><strong>目标总数：</strong>{{ currentDetail.summary?.total_targets ?? 0 }}</p>
-          </div>
-
-          <div class="dialog-actions">
-            <el-button v-if="currentDetail.report_file || currentDetail.report_url" type="success" @click="downloadReport(currentDetail)">
-              下载报告
-            </el-button>
-          </div>
-
-          <div class="stat-section" v-if="currentDetail.summary?.fruit_counts && Object.keys(currentDetail.summary.fruit_counts).length">
-            <h4>水果统计</h4>
-            <el-table :data="sortedFruitCounts" border>
-              <el-table-column prop="fruit" label="水果" />
-              <el-table-column prop="count" label="数量" width="100" />
-            </el-table>
-          </div>
-
-          <div class="stat-section" v-if="sortedRipenessData.length > 0">
-            <h4>熟度统计</h4>
-            <el-table :data="sortedRipenessData" border>
-              <el-table-column prop="fruit" label="水果" />
-              <el-table-column prop="ripeness" label="熟度" />
-              <el-table-column prop="count" label="数量" width="100" />
-            </el-table>
-          </div>
-
-          <div class="stat-section" v-if="diameterStatistics">
-            <h4>果径统计</h4>
-            <p>有效测量: {{ currentDetail.summary?.valid_measurements ?? 0 }}</p>
-            <p>平均果径: {{ formatNumber(diameterStatistics.avg_diameter_mm) }} mm</p>
-            <p>最小果径: {{ formatNumber(diameterStatistics.min_diameter_mm) }} mm</p>
-            <p>最大果径: {{ formatNumber(diameterStatistics.max_diameter_mm) }} mm</p>
-          </div>
-
-          <div v-if="normalizedDetailItems.length" class="detail-items">
-            <article v-for="(item, index) in normalizedDetailItems" :key="`${item.display_name}-${index}`" class="detail-item-card">
-              <div class="item-head">
-                <div>
-                  <strong>{{ item.display_name }}</strong>
-                  <span>{{ item.item_type === 'diameter_group' ? '果径图片组' : '普通图片' }}</span>
-                </div>
-              </div>
-
-              <div class="detail-image-grid">
-                <figure v-if="item.originalImageUrl" class="detail-figure">
-                  <img :src="item.originalImageUrl" alt="original" class="detail-image" />
-                  <figcaption>原图</figcaption>
-                </figure>
-                <figure v-if="item.rightImageUrl" class="detail-figure">
-                  <img :src="item.rightImageUrl" alt="right original" class="detail-image" />
-                  <figcaption>右图</figcaption>
-                </figure>
-                <figure v-if="item.annotatedImageUrl" class="detail-figure">
-                  <img :src="item.annotatedImageUrl" alt="annotated" class="detail-image" />
-                  <figcaption>检测结果</figcaption>
-                </figure>
-              </div>
-
-              <el-table :data="item.targets || []" border>
-                <el-table-column prop="target_index" label="目标序号" width="90" />
-                <el-table-column label="边界框" min-width="150">
-                  <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
-                </el-table-column>
-                <el-table-column label="种类" min-width="140">
-                  <template #default="{ row }">{{ row.classification?.class || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="熟度" min-width="180">
-                  <template #default="{ row }">{{ row.ripeness?.predicted_class || '-' }}</template>
-                </el-table-column>
-                <el-table-column label="果径(mm)" width="110">
-                  <template #default="{ row }">{{ formatNumber(row.diameter?.distance_mm) }}</template>
-                </el-table-column>
-                <el-table-column label="状态" min-width="120">
-                  <template #default="{ row }">{{ row.diameter?.status || 'ok' }}</template>
-                </el-table-column>
-              </el-table>
-            </article>
-          </div>
-
-          <div class="detail-footer">
-            <el-button @click="detailVisible = false">关闭窗口</el-button>
-          </div>
+    <el-dialog v-model="detailVisible" title="检测详情" width="88%" :close-on-click-modal="false">
+      <div v-if="currentDetail" class="detail-content">
+        <div class="detail-summary">
+          <p><strong>检测类型：</strong>{{ currentDetail.detection_type_display }}</p>
+          <p><strong>任务标题：</strong>{{ currentDetail.title || `${currentDetail.detection_type_display} #${currentDetail.id}` }}</p>
+          <p><strong>检测时间：</strong>{{ formatDateTime(currentDetail.created_at) }}</p>
+          <p><strong>状态：</strong>{{ currentDetail.status_display || currentDetail.status || 'completed' }}</p>
+          <p><strong>目标总数：</strong>{{ currentDetail.summary?.total_targets ?? 0 }}</p>
         </div>
-      </el-dialog>
-    </div>
+
+        <div class="dialog-actions">
+          <el-button
+            v-if="currentDetail.report_file || currentDetail.report_url"
+            type="success"
+            @click="downloadReport(currentDetail)"
+          >
+            下载报告
+          </el-button>
+        </div>
+
+        <div v-if="sortedFruitCounts.length" class="stat-section">
+          <h4>水果统计</h4>
+          <el-table :data="sortedFruitCounts" border>
+            <el-table-column prop="fruit" label="水果" />
+            <el-table-column prop="count" label="数量" width="100" />
+          </el-table>
+        </div>
+
+        <div v-if="sortedRipenessData.length" class="stat-section">
+          <h4>熟度统计</h4>
+          <el-table :data="sortedRipenessData" border>
+            <el-table-column prop="fruit" label="水果" />
+            <el-table-column prop="ripeness" label="熟度" />
+            <el-table-column prop="count" label="数量" width="100" />
+          </el-table>
+        </div>
+
+        <div v-if="diameterStatistics" class="stat-section">
+          <h4>果径统计</h4>
+          <p>有效测量：{{ currentDetail.summary?.valid_measurements ?? 0 }}</p>
+          <p>平均果径：{{ formatNumber(diameterStatistics.avg_diameter_mm) }} mm</p>
+          <p>最小果径：{{ formatNumber(diameterStatistics.min_diameter_mm) }} mm</p>
+          <p>最大果径：{{ formatNumber(diameterStatistics.max_diameter_mm) }} mm</p>
+        </div>
+
+        <div v-if="normalizedDetailItems.length" class="detail-items">
+          <article
+            v-for="(item, index) in normalizedDetailItems"
+            :key="`${item.display_name}-${index}`"
+            class="detail-item-card"
+          >
+            <div class="item-head">
+              <div>
+                <strong>{{ item.display_name }}</strong>
+                <span>{{ item.item_type === 'diameter_group' ? '果径图片组' : '普通图片' }}</span>
+              </div>
+            </div>
+
+            <div class="detail-image-grid">
+              <figure v-if="item.originalImageUrl" class="detail-figure">
+                <img :src="item.originalImageUrl" alt="original" class="detail-image" />
+                <figcaption>原图</figcaption>
+              </figure>
+              <figure v-if="item.rightImageUrl" class="detail-figure">
+                <img :src="item.rightImageUrl" alt="right original" class="detail-image" />
+                <figcaption>右图</figcaption>
+              </figure>
+              <figure v-if="item.annotatedImageUrl" class="detail-figure">
+                <img :src="item.annotatedImageUrl" alt="annotated" class="detail-image" />
+                <figcaption>检测结果</figcaption>
+              </figure>
+            </div>
+
+            <el-table :data="item.targets || []" border>
+              <el-table-column prop="target_index" label="目标序号" width="90" />
+              <el-table-column label="边界框" min-width="150">
+                <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
+              </el-table-column>
+              <el-table-column label="种类" min-width="140">
+                <template #default="{ row }">{{ row.classification?.class || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="熟度" min-width="180">
+                <template #default="{ row }">{{ row.ripeness?.predicted_class || '-' }}</template>
+              </el-table-column>
+              <el-table-column label="果径(mm)" width="110">
+                <template #default="{ row }">{{ formatNumber(row.diameter?.distance_mm) }}</template>
+              </el-table-column>
+              <el-table-column label="状态" min-width="120">
+                <template #default="{ row }">{{ row.diameter?.status || 'ok' }}</template>
+              </el-table-column>
+            </el-table>
+          </article>
+        </div>
+
+        <div class="detail-footer">
+          <el-button @click="detailVisible = false">关闭窗口</el-button>
+        </div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -186,7 +201,6 @@ export default {
 
     const tagType = (type) => {
       if (type === 'image') return 'primary'
-      if (type === 'video') return 'success'
       if (type === 'realtime') return 'warning'
       if (type === 'diameter') return 'info'
       return ''
@@ -204,7 +218,7 @@ export default {
         historyList.value = res.results || res
         total.value = res.count || historyList.value.length
       } catch (error) {
-        console.error('获取历史记录失败', error)
+        console.error('fetch history failed', error)
         ElMessage.error('获取历史记录失败')
       } finally {
         loading.value = false
@@ -221,7 +235,7 @@ export default {
         currentDetail.value = await getDetectionHistoryDetail(row.id)
         detailVisible.value = true
       } catch (error) {
-        console.error('获取详情失败', error)
+        console.error('fetch detail failed', error)
         ElMessage.error('获取详情失败')
       }
     }
@@ -249,11 +263,13 @@ export default {
         })
         await deleteDetectionHistory(row.id)
         ElMessage.success('删除成功')
-        if (historyList.value.length === 1 && currentPage.value > 1) currentPage.value -= 1
+        if (historyList.value.length === 1 && currentPage.value > 1) {
+          currentPage.value -= 1
+        }
         fetchHistory()
       } catch (error) {
         if (error !== 'cancel') {
-          console.error('删除失败', error)
+          console.error('delete history failed', error)
           ElMessage.error('删除失败，请稍后重试')
         }
       }
@@ -339,42 +355,52 @@ export default {
 </script>
 
 <style scoped>
-.history-container {
+.history-page {
+  display: grid;
+  gap: 18px;
   padding: 20px;
-  background: #f5f7fa;
-  min-height: calc(100vh - 60px);
 }
 
-.container {
-  max-width: 1320px;
-  margin: 0 auto;
-  background: white;
-  border-radius: 16px;
-  padding: 24px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+.panel {
+  background: #fff;
+  border-radius: 18px;
+  box-shadow: 0 12px 30px rgba(24, 53, 43, 0.08);
+  padding: 22px;
+}
+
+.page-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
 }
 
 .page-head h1 {
   margin: 0;
   font-size: 24px;
-  color: #2c3e50;
+  color: #1d4032;
 }
 
 .page-head p {
   margin: 8px 0 0;
-  color: #606266;
+  color: #60796d;
 }
 
 .toolbar {
   display: flex;
   gap: 12px;
-  margin: 24px 0 16px;
+  flex-wrap: wrap;
 }
 
 .summary-text {
   font-size: 14px;
   color: #606266;
   line-height: 1.6;
+}
+
+.pagination {
+  margin-top: 20px;
+  justify-content: center;
 }
 
 .detail-content {
@@ -387,11 +413,7 @@ export default {
   margin: 0 0 8px;
 }
 
-.dialog-actions {
-  display: flex;
-  justify-content: flex-end;
-}
-
+.dialog-actions,
 .detail-footer {
   display: flex;
   justify-content: flex-end;
@@ -458,12 +480,16 @@ export default {
 }
 
 @media (max-width: 768px) {
-  .history-container {
+  .history-page {
     padding: 12px;
   }
 
-  .toolbar {
+  .page-head {
     flex-direction: column;
+  }
+
+  .toolbar {
+    width: 100%;
   }
 }
 </style>

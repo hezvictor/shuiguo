@@ -85,7 +85,7 @@ request.interceptors.response.use(
     return payload
   },
   async (error) => {
-    if (error.response?.status === 401) {
+    if ([401, 403].includes(error.response?.status)) {
       const { clearLoginState } = await import('@/utils/auth')
       clearLoginState()
       if (window.location.pathname !== '/login') {
