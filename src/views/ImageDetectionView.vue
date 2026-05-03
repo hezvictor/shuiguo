@@ -242,6 +242,7 @@ export default {
       taskPolling: false,
       activeTaskId: null,
       activeTaskDetail: null,
+      pendingTaskToken: null,
       taskPollTimer: null,
       errorMessage: '',
       recentRecords: [],
@@ -267,7 +268,7 @@ export default {
       return this.activeTaskDetail?.detail_data?.progress || this.activeTaskDetail?.summary?.progress || null
     },
     taskProgressVisible() {
-      return Boolean(this.activeTaskId && this.activeTaskProgress)
+      return Boolean(this.activeTaskProgress || this.submitting || this.pendingTaskToken)
     },
     taskProcessedItems() {
       return Number(this.activeTaskProgress?.processed_items || 0)
@@ -285,9 +286,12 @@ export default {
       return this.activeTaskProgress?.current_item_label || ''
     },
     taskStatusLabel() {
-      return this.activeTaskDetail?.status_display || this.activeTaskDetail?.status || '-'
+      return this.activeTaskDetail?.status_display || this.activeTaskDetail?.status || (this.submitting ? '提交中' : '-')
     },
     taskProgressDescription() {
+      if (this.submitting && this.pendingTaskToken && String(this.activeTaskId || '').startsWith('creating_')) {
+        return '任务请求已发出，正在等待后端完成当前检测。'
+      }
       if (!this.activeTaskDetail) return '正在准备任务...'
       if (this.taskCurrentLabel) return `正在处理：${this.taskCurrentLabel}`
       if (this.isTaskTerminalStatus(this.activeTaskDetail.status)) return '任务已完成，结果已写入历史记录。'
@@ -368,6 +372,32 @@ export default {
         return
       }
 
+      const pendingInputCount = this.singleInputs.length + this.diameterInputs.length + this.mixedInputs.length
+      const pendingToken = `creating_${Date.now()}`
+      const pendingProgress = {
+        processed_items: 0,
+        total_items: pendingInputCount,
+        progress_percent: 0,
+        current_item_label: ''
+      }
+      this.pendingTaskToken = pendingToken
+      this.activeTaskId = pendingToken
+      this.activeTaskDetail = {
+        id: pendingToken,
+        title: '图片检测任务',
+        status: 'pending',
+        status_display: '提交中',
+        summary: {
+          input_count: pendingInputCount,
+          progress: pendingProgress
+        },
+        detail_data: {
+          items: [],
+          progress: pendingProgress
+        },
+        input_count: pendingInputCount
+      }
+
       const formData = new FormData()
       formData.append('detect_ripeness', this.options.detectRipeness ? 'true' : 'false')
       this.singleInputs.forEach((item) => formData.append('single_inputs', item.file))
@@ -377,6 +407,7 @@ export default {
       this.submitting = true
       try {
         const res = await createImageDetectionTask(formData)
+        this.pendingTaskToken = null
         this.activeTaskId = res.history_id
         this.activeTaskDetail = {
           id: res.history_id,
@@ -393,6 +424,11 @@ export default {
         await this.fetchRecentResults()
         ElMessage.success('图片检测任务已创建。')
       } catch (error) {
+        this.pendingTaskToken = null
+        if (String(this.activeTaskId || '').startsWith('creating_')) {
+          this.activeTaskId = null
+          this.activeTaskDetail = null
+        }
         console.error('create image detection task failed', error)
         this.errorMessage = error?.response?.data?.error || error.message || '图片检测失败，请稍后重试。'
       } finally {
