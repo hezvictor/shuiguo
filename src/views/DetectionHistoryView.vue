@@ -117,6 +117,20 @@
           <p>最大果径：{{ formatNumber(diameterStatistics.max_diameter_mm) }} mm</p>
         </div>
 
+        <div v-if="detailOperations.length" class="stat-section">
+          <h4>执行参数</h4>
+          <p v-for="entry in detailOperations" :key="`op-${entry.key}`">
+            <strong>{{ entry.label }}：</strong>{{ entry.value }}
+          </p>
+        </div>
+
+        <div v-if="detailContextRows.length" class="stat-section">
+          <h4>会话信息</h4>
+          <p v-for="entry in detailContextRows" :key="`ctx-${entry.key}`">
+            <strong>{{ entry.label }}：</strong>{{ entry.value }}
+          </p>
+        </div>
+
         <div v-if="normalizedDetailItems.length" class="detail-items">
           <article
             v-for="(item, index) in normalizedDetailItems"
@@ -126,9 +140,11 @@
             <div class="item-head">
               <div>
                 <strong>{{ item.display_name }}</strong>
-                <span>{{ item.item_type === 'diameter_group' ? '果径图片组' : '普通图片' }}</span>
+                <span>{{ itemTypeText(item) }}</span>
               </div>
             </div>
+
+            <p class="summary-text">{{ itemSummaryText(item) }}</p>
 
             <div class="detail-image-grid">
               <figure v-if="item.originalImageUrl" class="detail-figure">
@@ -145,7 +161,7 @@
               </figure>
             </div>
 
-            <el-table :data="item.targets || []" border>
+            <el-table v-if="itemHasTargets(item)" :data="item.targets || []" border>
               <el-table-column prop="target_index" label="目标序号" width="90" />
               <el-table-column label="边界框" min-width="150">
                 <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
@@ -314,6 +330,46 @@ export default {
       return summary.diameter_statistics || summary.statistics || null
     })
 
+    const detailOperations = computed(() => {
+      const operations = currentDetail.value?.detail_data?.operations || {}
+      return Object.entries(operations)
+        .filter(([, value]) => value !== null && value !== undefined && value !== '')
+        .map(([key, value]) => ({
+          key,
+          label: key,
+          value: typeof value === 'object' ? JSON.stringify(value) : String(value)
+        }))
+    })
+
+    const detailContextRows = computed(() => {
+      const context = currentDetail.value?.detail_data?.context || {}
+      return Object.entries(context)
+        .filter(([, value]) => value !== null && value !== undefined && value !== '')
+        .map(([key, value]) => ({
+          key,
+          label: key,
+          value: typeof value === 'object' ? JSON.stringify(value) : String(value)
+        }))
+    })
+
+    const itemTypeText = (item) => {
+      const type = item?.item_type || ''
+      if (type === 'diameter_group' || type === 'camera_diameter' || type === 'realtime_dual') return '果径结果'
+      if (type === 'realtime_single') return '实时单摄结果'
+      if (type === 'image') return '图片检测结果'
+      return '检测结果'
+    }
+
+    const itemHasTargets = (item) => Array.isArray(item?.targets) && item.targets.length > 0
+
+    const itemSummaryText = (item) => {
+      const summary = item?.summary || {}
+      if (summary.valid_measurements) {
+        return `目标 ${summary.total_targets || 0} 个，有效测量 ${summary.valid_measurements || 0} 个`
+      }
+      return `目标 ${summary.total_targets || 0} 个`
+    }
+
     const historySummaryText = (item) => {
       const summary = item.summary || {}
       if (item.detection_type === 'diameter') {
@@ -349,6 +405,11 @@ export default {
       sortedRipenessData,
       normalizedDetailItems,
       diameterStatistics,
+      detailOperations,
+      detailContextRows,
+      itemTypeText,
+      itemHasTargets,
+      itemSummaryText,
       historySummaryText,
       translateFruitLabel,
       translateRipenessLabel

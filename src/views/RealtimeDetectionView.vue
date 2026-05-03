@@ -265,6 +265,7 @@ export default defineComponent({
     const scanning = ref(false)
     const errorMessage = ref('')
     const currentTargets = ref([])
+    const lastDetectionPayload = ref(null)
     const lastDetectAt = ref(null)
     const sessionSummary = ref(createEmptySummary())
     const sessionMode = ref('')
@@ -503,6 +504,7 @@ export default defineComponent({
           frame_data_url: mode === 'single' ? previewFrameDataUrl.value || undefined : undefined
         })
         currentTargets.value = payload.targets || []
+        lastDetectionPayload.value = payload
         lastDetectAt.value = Date.now()
         updateSessionSummary(payload)
         return true
@@ -540,6 +542,7 @@ export default defineComponent({
       sessionMode.value = effectiveMode.value
       sessionSummary.value = createEmptySummary()
       currentTargets.value = []
+      lastDetectionPayload.value = null
       isRunning.value = true
 
       const ok = await runDetectionOnce()
@@ -606,7 +609,17 @@ export default defineComponent({
             single_camera_index: singleCameraIndex.value,
             dual_left_camera_index: dualLeftCameraIndex.value,
             dual_right_camera_index: dualRightCameraIndex.value
-          }
+          },
+          last_capture: lastDetectionPayload.value
+            ? {
+                annotated_image: lastDetectionPayload.value.annotated_image,
+                single_annotated_image: lastDetectionPayload.value.single_annotated_image,
+                dual_annotated_image: lastDetectionPayload.value.dual_annotated_image,
+                targets: lastDetectionPayload.value.targets || [],
+                single_targets: lastDetectionPayload.value.single_targets || [],
+                dual_targets: lastDetectionPayload.value.dual_targets || []
+              }
+            : null
         })
         ElMessage.success('本次实时检测会话已保存到历史记录')
       } catch (error) {
