@@ -20,8 +20,6 @@ from fruit_api.services.camera import (
     get_stereo_preview_manager,
 )
 from fruit_api.services.camera.device_preview_service import DevicePreviewSession
-from fruit_api.services.detection.detect_service import yolo_targets
-from fruit_api.services.label_map_service import translate_fruit_label, translate_ripeness_label
 
 
 def _get_camera_service():
@@ -64,6 +62,7 @@ class FruitRecognitionConsumer(AsyncWebsocketConsumer):
 
             app_config = apps.get_app_config("fruit_api")
             app_config.ensure_models_loaded()
+            yolo_model = app_config.yolo_model
             fruit_model = app_config.fruit_model
             fruit_preprocess = app_config.fruit_preprocess
             fruit_class_names = app_config.fruit_class_names
@@ -71,49 +70,55 @@ class FruitRecognitionConsumer(AsyncWebsocketConsumer):
             device = app_config.device
             ripeness_supported = app_config.RIPENESS_SUPPORTED
 
+            results = yolo_model.predict(source=img, conf=0.25, save=False)
+            result = results[0]
+            boxes = result.boxes
+
             predictions = []
-            for target in yolo_targets(img, app_config, conf=0.25):
-                x1, y1, x2, y2 = target["bbox"]
-                conf = target["confidence"]
-                label = target["label"]
-                cropped = img.crop((x1, y1, x2, y2))
+            if boxes is not None and len(boxes) > 0:
+                for box in boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
+                    conf = box.conf[0].item()
+                    cls = int(box.cls[0].item())
+                    label = result.names[cls]
 
-                img_t = fruit_preprocess(cropped).unsqueeze(0).to(device)
-                with torch.no_grad():
-                    fruit_output = fruit_model(img_t)
-                fruit_probs = F.softmax(fruit_output, dim=1)[0]
-                fruit_idx = torch.argmax(fruit_probs).item()
-                fruit_class_en = fruit_class_names[fruit_idx]
-                fruit_class = translate_fruit_label(fruit_class_en)
-                fruit_confidence = fruit_probs[fruit_idx].item()
+                    cropped = img.crop((x1, y1, x2, y2))
 
-                ripeness = None
-                if fruit_class_en in ripeness_supported:
-                    model_name = ripeness_supported[fruit_class_en]["model_attr"]
-                    classes_attr = ripeness_supported[fruit_class_en]["classes_attr"]
-                    model = getattr(app_config, model_name)
-                    classes = getattr(app_config, classes_attr)
-
-                    img_t_ripe = ripeness_preprocess(cropped).unsqueeze(0).to(device)
+                    img_t = fruit_preprocess(cropped).unsqueeze(0).to(device)
                     with torch.no_grad():
-                        ripe_output = model(img_t_ripe)
-                    ripe_probs = F.softmax(ripe_output, dim=1)[0]
-                    ripe_idx = torch.argmax(ripe_probs).item()
-                    ripeness = {
-                        "class": translate_ripeness_label(classes[ripe_idx]),
-                        "confidence": ripe_probs[ripe_idx].item(),
-                    }
+                        fruit_output = fruit_model(img_t)
+                    fruit_probs = F.softmax(fruit_output, dim=1)[0]
+                    fruit_idx = torch.argmax(fruit_probs).item()
+                    fruit_class = fruit_class_names[fruit_idx]
+                    fruit_confidence = fruit_probs[fruit_idx].item()
 
-                predictions.append(
-                    {
-                        "bbox": [x1, y1, x2, y2],
-                        "label": label,
-                        "confidence": conf,
-                        "fruit_class": fruit_class,
-                        "fruit_confidence": fruit_confidence,
-                        "ripeness": ripeness,
-                    }
-                )
+                    ripeness = None
+                    if fruit_class in ripeness_supported:
+                        model_name = ripeness_supported[fruit_class]["model_attr"]
+                        classes_attr = ripeness_supported[fruit_class]["classes_attr"]
+                        model = getattr(app_config, model_name)
+                        classes = getattr(app_config, classes_attr)
+
+                        img_t_ripe = ripeness_preprocess(cropped).unsqueeze(0).to(device)
+                        with torch.no_grad():
+                            ripe_output = model(img_t_ripe)
+                        ripe_probs = F.softmax(ripe_output, dim=1)[0]
+                        ripe_idx = torch.argmax(ripe_probs).item()
+                        ripeness = {
+                            "class": classes[ripe_idx],
+                            "confidence": ripe_probs[ripe_idx].item(),
+                        }
+
+                    predictions.append(
+                        {
+                            "bbox": [x1, y1, x2, y2],
+                            "label": label,
+                            "confidence": conf,
+                            "fruit_class": fruit_class,
+                            "fruit_confidence": fruit_confidence,
+                            "ripeness": ripeness,
+                        }
+                    )
 
             await self.send(
                 text_data=json.dumps(

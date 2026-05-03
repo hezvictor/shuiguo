@@ -1,10 +1,16 @@
+import re
+
 from django.conf import settings
 from rest_framework import serializers
 
 from .models import DetectionHistory
+from .services.history_normalization_service import normalize_history_detail, normalize_history_summary
 
 
 class DetectionHistorySerializer(serializers.ModelSerializer):
+    title = serializers.SerializerMethodField()
+    summary = serializers.SerializerMethodField()
+    detail_data = serializers.SerializerMethodField()
     detection_type_display = serializers.CharField(source="get_detection_type_display", read_only=True)
     user_name = serializers.CharField(source="user.username", read_only=True)
     status_display = serializers.CharField(source="get_status_display", read_only=True)
@@ -50,8 +56,21 @@ class DetectionHistorySerializer(serializers.ModelSerializer):
     def get_cover_image_url(self, obj):
         return self._media_url(obj.cover_image)
 
+    def get_title(self, obj):
+        raw_title = (obj.title or "").strip()
+        if not raw_title:
+            return raw_title
+        return re.sub(r"\s\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$", "", raw_title)
+
+    def get_summary(self, obj):
+        return normalize_history_summary(obj)
+
+    def get_detail_data(self, obj):
+        return normalize_history_detail(obj)
+
     def get_source_entries(self, obj):
-        items = obj.detail_data.get("items", []) if isinstance(obj.detail_data, dict) else []
+        detail_data = normalize_history_detail(obj)
+        items = detail_data.get("items", []) if isinstance(detail_data, dict) else []
         entries = []
         seen = set()
 

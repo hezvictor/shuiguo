@@ -6,7 +6,7 @@ from typing import Dict
 from django.conf import settings
 
 from fruit_api.models import DetectionHistory
-from fruit_api.services.label_map_service import translate_label_map, translate_nested_ripeness_counts
+from fruit_api.services.history_normalization_service import build_realtime_history_detail
 
 
 class RealtimePayloadError(Exception):
@@ -23,8 +23,8 @@ def validate_realtime_payload(data: Dict) -> None:
 def build_realtime_summary(data: Dict) -> Dict:
     summary = {
         'total_targets': int(data.get('total_targets') or 0),
-        'fruit_counts': translate_label_map(data.get('fruit_counts') or {}, label_type='fruit'),
-        'ripeness_counts': translate_nested_ripeness_counts(data.get('ripeness_counts') or {}),
+        'fruit_counts': data.get('fruit_counts') or {},
+        'ripeness_counts': data.get('ripeness_counts') or {},
     }
     for key in [
         'mode',
@@ -62,7 +62,7 @@ def create_realtime_history(user, summary: Dict, report_filename: str, detail_da
             'camera_profile': summary.get('camera_profile'),
         },
         summary=summary,
-        detail_data=detail_data,
+        detail_data=build_realtime_history_detail(detail_data.get('session_report') or detail_data),
         report_file=report_filename,
     )
 

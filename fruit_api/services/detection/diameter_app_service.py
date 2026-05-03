@@ -4,6 +4,7 @@ from typing import Dict, Optional
 from django.conf import settings
 from fruit_api.diameter_service import build_measure_service
 from fruit_api.models import DetectionHistory
+from fruit_api.services.history_normalization_service import build_diameter_history_detail, normalize_diameter_statistics
 
 
 class DiameterDependencyError(Exception):
@@ -68,21 +69,56 @@ def _sanitize_measure_payload(value):
 
 
 def _save_history(user, payload: Dict) -> None:
-    summary = {
-        "type": "fruit_diameter",
-        "total_targets": payload.get("total_targets"),
-        "valid_measurements": payload.get("valid_measurements"),
-        "statistics": payload.get("statistics"),
-        "inference_id": payload.get("inference_id"),
-    }
+    detail_payload = _build_history_payload(payload)
+    summary = _build_history_summary(detail_payload)
+    report_file = detail_payload.get("annotated_image") or detail_payload.get("result_json_file")
+    detail_data = build_diameter_history_detail(detail_payload)
 
-    report_file = _relative_media_path(payload.get("annotated_image_path")) or _relative_media_path(payload.get("result_json_path"))
     DetectionHistory.objects.create(
         user=user,
         detection_type="diameter",
+        title="双目果径测量",
+        input_count=1,
         summary=summary,
+        detail_data=detail_data,
+        cover_image=detail_payload.get("annotated_image"),
         report_file=report_file,
     )
+
+
+def _build_history_summary(payload: Dict) -> Dict:
+    return {
+        "type": "fruit_diameter",
+        "input_count": 1,
+        "total_targets": int(payload.get("total_targets") or 0),
+        "valid_measurements": int(payload.get("valid_measurements") or 0),
+        "statistics": normalize_diameter_statistics(payload.get("statistics")),
+        "diameter_statistics": normalize_diameter_statistics(payload.get("statistics")),
+        "inference_id": payload.get("inference_id"),
+        "fruit_counts": payload.get("fruit_counts") or {},
+        "ripeness_counts": payload.get("ripeness_counts") or {},
+    }
+
+
+def _build_history_payload(payload: Dict) -> Dict:
+    measurement = payload.get("measurement", {}) or {}
+    return {
+        "message": payload.get("message"),
+        "total_targets": payload.get("total_targets"),
+        "valid_measurements": payload.get("valid_measurements"),
+        "statistics": payload.get("statistics"),
+        "inference_id": measurement.get("inference_id") or payload.get("inference_id"),
+        "targets": payload.get("targets") or measurement.get("targets") or [],
+        "annotated_image": _relative_media_path(payload.get("visualization_file")) or _relative_media_path(payload.get("annotated_image_path")),
+        "result_json_file": _relative_media_path(measurement.get("result_json_path")) or _relative_media_path(payload.get("result_json_path")),
+        "csv_file": _relative_media_path(measurement.get("csv_path")) or _relative_media_path(payload.get("csv_path")),
+        "left_image": _relative_media_path((payload.get("inference") or {}).get("left_image_path")),
+        "right_image": _relative_media_path((payload.get("inference") or {}).get("right_image_path")),
+        "distance_unit": payload.get("distance_unit") or "mm",
+        "split_mode": payload.get("split_mode"),
+        "conf": payload.get("conf"),
+        "save_vis": payload.get("save_vis"),
+    }
 
 
 def run_measure_inference(*, yolo_model, **kwargs) -> Dict:
@@ -140,17 +176,14 @@ def measure_and_save_history(
     except Exception as exc:
         raise DiameterExecutionError(str(exc)) from exc
 
-    DetectionHistory.objects.create(
-        user=user,
-        detection_type="diameter",
-        summary={
-            "type": "fruit_diameter",
-            "total_targets": payload["total_targets"],
-            "valid_measurements": payload["valid_measurements"],
-            "statistics": payload["statistics"],
-            "inference_id": payload["measurement"].get("inference_id"),
+    _save_history(
+        user,
+        {
+            **payload,
+            "split_mode": split_mode,
+            "conf": conf,
+            "save_vis": save_vis,
         },
-        report_file=payload.get("visualization_file"),
     )
     return _sanitize_measure_payload(payload)
 

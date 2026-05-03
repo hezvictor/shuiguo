@@ -3,7 +3,6 @@ import csv
 import gc
 import io
 import json
-import shutil
 import sys
 import threading
 import time
@@ -20,10 +19,6 @@ import torch.nn as nn
 from django.conf import settings
 from PIL import Image
 from torch.serialization import add_safe_globals
-from fruit_api.services.detection.yolo_service import (
-    choose_preferred_detection_side,
-    predict_yolo_targets_from_bgr,
-)
 
 
 @dataclass
@@ -37,22 +32,6 @@ class MeasureConfig:
     infer_valid_iters: int = 16
     preferred_device: str = "auto"
     allow_cpu_fallback: bool = True
-
-
-@dataclass
-class RectifyContext:
-    left_maps: Tuple[np.ndarray, np.ndarray]
-    right_maps: Tuple[np.ndarray, np.ndarray]
-    q: np.ndarray
-    kl: np.ndarray
-    dl: np.ndarray
-    kr: np.ndarray
-    dr: np.ndarray
-    r1: np.ndarray
-    r2: np.ndarray
-    p1: np.ndarray
-    p2: np.ndarray
-    size: Tuple[int, int]
 
 
 class MonsterRuntime:
@@ -193,7 +172,7 @@ class FruitDiameterService:
         self._cpu_runtime: Optional[MonsterRuntime] = None
         self._prefer_cpu_runtime = False
         self._calib_cache: Dict[str, Dict[str, Any]] = {}
-        self._rectify_cache: Dict[Tuple[str, int, int], RectifyContext] = {}
+        self._rectify_cache: Dict[Tuple[str, int, int], Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray], np.ndarray]] = {}
 
     def _get_cpu_runtime(self) -> MonsterRuntime:
         if self._cpu_runtime is None:
@@ -332,7 +311,7 @@ class FruitDiameterService:
             self._calib_cache[cache_key] = self._parse_calibration(calib_path)
         return self._calib_cache[cache_key]
 
-    def _get_rectify_context(self, calib_path: Path, width: int, height: int) -> RectifyContext:
+    def _get_rectify_data(self, calib_path: Path, width: int, height: int) -> Tuple[Tuple[np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray], np.ndarray]:
         key = (str(calib_path.resolve()), width, height)
         if key in self._rectify_cache:
             return self._rectify_cache[key]
@@ -363,20 +342,7 @@ class FruitDiameterService:
         )
         map_l1, map_l2 = cv2.initUndistortRectifyMap(kl, calib["DL"], r1, p1, size, cv2.CV_32FC1)
         map_r1, map_r2 = cv2.initUndistortRectifyMap(kr, calib["DR"], r2, p2, size, cv2.CV_32FC1)
-        self._rectify_cache[key] = RectifyContext(
-            left_maps=(map_l1, map_l2),
-            right_maps=(map_r1, map_r2),
-            q=q,
-            kl=kl,
-            dl=calib["DL"],
-            kr=kr,
-            dr=calib["DR"],
-            r1=r1,
-            r2=r2,
-            p1=p1,
-            p2=p2,
-            size=size,
-        )
+        self._rectify_cache[key] = ((map_l1, map_l2), (map_r1, map_r2), q)
         return self._rectify_cache[key]
 
     def _resolve_calib_path(self, calib_path: Optional[str]) -> Path:
@@ -411,12 +377,6 @@ class FruitDiameterService:
     def _manifest_path(self, inference_id: str) -> Path:
         return self._job_dir(inference_id) / "manifest.json"
 
-    def cleanup_inference(self, inference_id: Optional[str]) -> None:
-        if not inference_id:
-            return
-        job_dir = self._job_dir(inference_id)
-        shutil.rmtree(job_dir, ignore_errors=True)
-
     def _result_json_path(self, job_dir: Path, slug: str) -> Path:
         return job_dir / f"{slug}.json"
 
@@ -436,220 +396,6 @@ class FruitDiameterService:
             "label": label,
             "confidence": round(float(confidence), 6),
             "bbox": [int(v) for v in bbox],
-        }
-
-    @staticmethod
-    def _sanitize_bbox(bbox: List[int], width: int, height: int) -> Optional[List[int]]:
-        if len(bbox) != 4:
-            return None
-        x1, y1, x2, y2 = [int(round(v)) for v in bbox]
-        x1 = int(np.clip(x1, 0, max(0, width - 1)))
-        y1 = int(np.clip(y1, 0, max(0, height - 1)))
-        x2 = int(np.clip(x2, 0, max(0, width - 1)))
-        y2 = int(np.clip(y2, 0, max(0, height - 1)))
-        if x2 <= x1 or y2 <= y1:
-            return None
-        return [x1, y1, x2, y2]
-
-    def _map_bbox_to_rectified_for_camera(
-        self,
-        bbox: List[int],
-        *,
-        camera_matrix: np.ndarray,
-        dist_coeffs: np.ndarray,
-        rectification_matrix: np.ndarray,
-        projection_matrix: np.ndarray,
-        size: Tuple[int, int],
-    ) -> Optional[List[int]]:
-        width, height = size
-        x1, y1, x2, y2 = [float(v) for v in bbox]
-        center_x = (x1 + x2) / 2.0
-        center_y = (y1 + y2) / 2.0
-        sample_points = np.array(
-            [
-                [[x1, y1]],
-                [[x2, y1]],
-                [[x1, y2]],
-                [[x2, y2]],
-                [[center_x, y1]],
-                [[center_x, y2]],
-                [[x1, center_y]],
-                [[x2, center_y]],
-                [[center_x, center_y]],
-            ],
-            dtype=np.float32,
-        )
-        rectified_points = cv2.undistortPoints(
-            sample_points,
-            camera_matrix,
-            dist_coeffs,
-            R=rectification_matrix,
-            P=projection_matrix,
-        ).reshape(-1, 2)
-        valid_points = rectified_points[np.all(np.isfinite(rectified_points), axis=1)]
-        if valid_points.size == 0:
-            return None
-
-        mapped_bbox = [
-            float(np.min(valid_points[:, 0])),
-            float(np.min(valid_points[:, 1])),
-            float(np.max(valid_points[:, 0])),
-            float(np.max(valid_points[:, 1])),
-        ]
-        return self._sanitize_bbox(mapped_bbox, width, height)
-
-    def _map_bbox_to_rectified(self, bbox: List[int], rectify_context: RectifyContext) -> Optional[List[int]]:
-        return self._map_bbox_to_rectified_for_camera(
-            bbox,
-            camera_matrix=rectify_context.kl,
-            dist_coeffs=rectify_context.dl,
-            rectification_matrix=rectify_context.r1,
-            projection_matrix=rectify_context.p1,
-            size=rectify_context.size,
-        )
-
-    def _map_right_bbox_to_rectified(self, bbox: List[int], rectify_context: RectifyContext) -> Optional[List[int]]:
-        return self._map_bbox_to_rectified_for_camera(
-            bbox,
-            camera_matrix=rectify_context.kr,
-            dist_coeffs=rectify_context.dr,
-            rectification_matrix=rectify_context.r2,
-            projection_matrix=rectify_context.p2,
-            size=rectify_context.size,
-        )
-
-    @staticmethod
-    def _bbox_iou(first: List[int], second: List[int]) -> float:
-        ax1, ay1, ax2, ay2 = [float(v) for v in first]
-        bx1, by1, bx2, by2 = [float(v) for v in second]
-        inter_x1 = max(ax1, bx1)
-        inter_y1 = max(ay1, by1)
-        inter_x2 = min(ax2, bx2)
-        inter_y2 = min(ay2, by2)
-        inter_w = max(0.0, inter_x2 - inter_x1)
-        inter_h = max(0.0, inter_y2 - inter_y1)
-        inter_area = inter_w * inter_h
-        if inter_area <= 0.0:
-            return 0.0
-        first_area = max(1.0, (ax2 - ax1) * (ay2 - ay1))
-        second_area = max(1.0, (bx2 - bx1) * (by2 - by1))
-        return float(inter_area / (first_area + second_area - inter_area))
-
-    @classmethod
-    def _bbox_similarity_score(cls, candidate: List[int], expected: List[int]) -> float:
-        cand_width = max(1.0, float(candidate[2] - candidate[0]))
-        cand_height = max(1.0, float(candidate[3] - candidate[1]))
-        expected_width = max(1.0, float(expected[2] - expected[0]))
-        expected_height = max(1.0, float(expected[3] - expected[1]))
-        cand_area = cand_width * cand_height
-        expected_area = expected_width * expected_height
-
-        cand_center = ((candidate[0] + candidate[2]) / 2.0, (candidate[1] + candidate[3]) / 2.0)
-        expected_center = ((expected[0] + expected[2]) / 2.0, (expected[1] + expected[3]) / 2.0)
-        max_distance = max(1.0, float(np.hypot(expected_width, expected_height)))
-        center_distance = float(np.hypot(cand_center[0] - expected_center[0], cand_center[1] - expected_center[1]))
-        center_score = max(0.0, 1.0 - (center_distance / max_distance))
-        area_score = min(cand_area, expected_area) / max(cand_area, expected_area)
-        iou_score = cls._bbox_iou(candidate, expected)
-        return float(0.45 * center_score + 0.35 * area_score + 0.20 * iou_score)
-
-    def _refine_left_bbox_from_reference(self, left_rect_bgr: np.ndarray, approx_bbox: List[int]) -> Optional[List[int]]:
-        if left_rect_bgr.size == 0:
-            return None
-
-        height, width = left_rect_bgr.shape[:2]
-        sanitized_bbox = self._sanitize_bbox(approx_bbox, width, height)
-        if sanitized_bbox is None:
-            return None
-
-        x1, y1, x2, y2 = sanitized_bbox
-        bbox_width = x2 - x1
-        bbox_height = y2 - y1
-        search_margin_x = max(24, int(round(bbox_width * 0.18)))
-        search_margin_y = max(16, int(round(bbox_height * 0.12)))
-        sx1 = max(0, x1 - search_margin_x)
-        sy1 = max(0, y1 - search_margin_y)
-        sx2 = min(width, x2 + search_margin_x)
-        sy2 = min(height, y2 + search_margin_y)
-        if sx2 <= sx1 or sy2 <= sy1:
-            return sanitized_bbox
-
-        gray = cv2.cvtColor(left_rect_bgr, cv2.COLOR_BGR2GRAY)
-        roi = gray[sy1:sy2, sx1:sx2]
-        if roi.size == 0:
-            return sanitized_bbox
-
-        blurred = cv2.GaussianBlur(roi, (5, 5), 0)
-        kernel = np.ones((5, 5), dtype=np.uint8)
-        min_contour_area = max(64.0, float(bbox_width * bbox_height) * 0.08)
-        candidates: List[Tuple[float, List[int]]] = []
-
-        for threshold_mode in (cv2.THRESH_BINARY, cv2.THRESH_BINARY_INV):
-            _, mask = cv2.threshold(blurred, 0, 255, threshold_mode | cv2.THRESH_OTSU)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel, iterations=1)
-            mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel, iterations=2)
-            contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-            for contour in contours:
-                contour_area = float(cv2.contourArea(contour))
-                if contour_area < min_contour_area:
-                    continue
-                local_x, local_y, local_w, local_h = cv2.boundingRect(contour)
-                candidate = self._sanitize_bbox(
-                    [sx1 + local_x, sy1 + local_y, sx1 + local_x + local_w, sy1 + local_y + local_h],
-                    width,
-                    height,
-                )
-                if candidate is None:
-                    continue
-                candidates.append((self._bbox_similarity_score(candidate, sanitized_bbox), candidate))
-
-        if not candidates:
-            return sanitized_bbox
-
-        best_score, best_bbox = max(candidates, key=lambda item: item[0])
-        return best_bbox if best_score >= 0.18 else sanitized_bbox
-
-    def _predict_yolo_detections(
-        self,
-        *,
-        yolo_model,
-        image_bgr: np.ndarray,
-        detect_threshold: float,
-        runtime_device: str,
-    ) -> List[Dict[str, Any]]:
-        device = "cpu" if runtime_device == "cpu" else None
-        targets = predict_yolo_targets_from_bgr(
-            yolo_model=yolo_model,
-            image_bgr=image_bgr,
-            conf=detect_threshold,
-            device=device,
-            translate_labels=True,
-        )
-        return [
-            self._serialize_detection(target["index"], target["label"], target["confidence"], target["bbox"])
-            for target in targets
-        ]
-
-    def _build_measurement_detection(
-        self,
-        *,
-        detection: Dict[str, Any],
-        measured_bbox: List[int],
-        detection_source: str,
-        classification_source: str,
-        classification_bbox: List[int],
-        rectified_source_bbox: Optional[List[int]] = None,
-    ) -> Dict[str, Any]:
-        return {
-            "index": detection.get("index"),
-            "label": detection.get("label"),
-            "confidence": detection.get("confidence"),
-            "bbox": [int(v) for v in measured_bbox],
-            "detection_source": detection_source,
-            "classification_source": classification_source,
-            "classification_bbox": [int(v) for v in classification_bbox],
-            "source_bbox": [int(v) for v in detection.get("bbox", [])],
-            "rectified_source_bbox": [int(v) for v in rectified_source_bbox] if rectified_source_bbox else None,
         }
 
     @staticmethod
@@ -801,9 +547,7 @@ class FruitDiameterService:
         target_width = left_bgr.shape[1]
         target_height = left_bgr.shape[0]
 
-        rectify_context = self._get_rectify_context(calib_file, target_width, target_height)
-        map_l1, map_l2 = rectify_context.left_maps
-        map_r1, map_r2 = rectify_context.right_maps
+        (map_l1, map_l2), (map_r1, map_r2), _ = self._get_rectify_data(calib_file, target_width, target_height)
         left_rect = cv2.remap(left_bgr, map_l1, map_l2, interpolation=cv2.INTER_LINEAR)
         right_rect = cv2.remap(right_bgr, map_r1, map_r2, interpolation=cv2.INTER_LINEAR)
 
@@ -833,77 +577,27 @@ class FruitDiameterService:
         time_ms = int(round((time.perf_counter() - infer_start) * 1000))
 
         detections: List[Dict[str, Any]] = []
-        right_detections: List[Dict[str, Any]] = []
-        measurement_detections: List[Dict[str, Any]] = []
         detect_canvas = left_rect.copy()
         detect_threshold = detect_conf if detect_conf is not None else self.config.default_conf
-        source_analysis = choose_preferred_detection_side(left_bgr, right_bgr)
-        preferred_side = source_analysis["preferred_side"]
-        detection_attempt_order = ["left", "right"] if preferred_side == "left" else ["right", "left"]
-
-        for detection_side in detection_attempt_order:
-            source_bgr = left_bgr if detection_side == "left" else right_bgr
-            current_detections = self._predict_yolo_detections(
-                yolo_model=yolo_model,
-                image_bgr=source_bgr,
-                detect_threshold=detect_threshold,
-                runtime_device=runtime_device,
-            )
-            if detection_side == "left":
-                detections = current_detections
-                for detection in current_detections:
-                    rectified_bbox = self._map_bbox_to_rectified(detection["bbox"], rectify_context)
-                    if rectified_bbox is None:
-                        rectified_bbox = self._sanitize_bbox(detection["bbox"], target_width, target_height)
-                    if rectified_bbox is None:
-                        continue
-                    measurement_detections.append(
-                        self._build_measurement_detection(
-                            detection=detection,
-                            measured_bbox=rectified_bbox,
-                            detection_source="left",
-                            classification_source="left",
-                            classification_bbox=detection["bbox"],
-                        )
-                    )
-            else:
-                right_detections = current_detections
-                detections = current_detections
-                for detection in current_detections:
-                    right_rectified_bbox = self._map_right_bbox_to_rectified(detection["bbox"], rectify_context)
-                    if right_rectified_bbox is None:
-                        right_rectified_bbox = self._sanitize_bbox(detection["bbox"], target_width, target_height)
-                    if right_rectified_bbox is None:
-                        continue
-                    measured_bbox = self._refine_left_bbox_from_reference(left_rect, right_rectified_bbox)
-                    if measured_bbox is None:
-                        continue
-                    measurement_detections.append(
-                        self._build_measurement_detection(
-                            detection=detection,
-                            measured_bbox=measured_bbox,
-                            detection_source="right",
-                            classification_source="right",
-                            classification_bbox=detection["bbox"],
-                            rectified_source_bbox=right_rectified_bbox,
-                        )
-                    )
-
-            if measurement_detections:
-                break
-
-        for detection in measurement_detections:
-            bbox = detection.get("bbox") or []
-            if len(bbox) != 4:
-                continue
-            label = detection.get("label") or "target"
-            confidence = detection.get("confidence")
-            source_suffix = " (右目)" if detection.get("detection_source") == "right" else ""
-            caption = f"{(detection.get('index') or 0) + 1}. {label}{source_suffix}"
-            if confidence is not None:
-                caption = f"{caption} {float(confidence):.2f}"
-            color = (0, 255, 255) if detection.get("detection_source") == "right" else (0, 255, 0)
-            self._draw_bbox(detect_canvas, bbox, caption, color)
+        predict_kwargs = {
+            "source": Image.fromarray(cv2.cvtColor(left_rect, cv2.COLOR_BGR2RGB)),
+            "conf": detect_threshold,
+            "save": False,
+            "verbose": False,
+        }
+        if runtime_device == "cpu":
+            predict_kwargs["device"] = "cpu"
+        yolo_results = yolo_model.predict(**predict_kwargs)
+        if yolo_results:
+            result = yolo_results[0]
+            boxes = result.boxes
+            if boxes is not None and len(boxes) > 0:
+                for index, box in enumerate(boxes):
+                    bbox = [int(v) for v in box.xyxy[0].tolist()]
+                    label = result.names[int(box.cls[0].item())]
+                    confidence = float(box.conf[0].item())
+                    detections.append(self._serialize_detection(index, label, confidence, bbox))
+                    self._draw_bbox(detect_canvas, bbox, f"{index + 1}. {label} {confidence:.2f}", (0, 255, 0))
 
         np.save(str(disp_npy_path), disp.astype(np.float32))
         if save_color:
@@ -929,11 +623,7 @@ class FruitDiameterService:
             "runtime_device": runtime_device,
             "used_cpu_fallback": used_cpu_fallback,
             "runtime_warning": runtime_warning,
-            "source_analysis": source_analysis,
-            "detection_source": measurement_detections[0]["detection_source"] if measurement_detections else None,
             "detections": detections,
-            "right_detections": right_detections,
-            "measurement_detections": measurement_detections,
         }
         self._manifest_path(inference_id).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -957,11 +647,7 @@ class FruitDiameterService:
             "runtime_device": runtime_device,
             "used_cpu_fallback": used_cpu_fallback,
             "runtime_warning": runtime_warning,
-            "source_analysis": source_analysis,
-            "detection_source": measurement_detections[0]["detection_source"] if measurement_detections else None,
             "detections": detections,
-            "right_detections": right_detections,
-            "measurement_detections": measurement_detections,
             "detect_vis_path": manifest["detect_vis_path"],
             "disp_vis_url": self._media_url(self._relative_media_path(disp_vis_path) if save_color else None),
             "detect_vis_url": self._media_url(self._relative_media_path(detect_vis_path)),
@@ -1002,7 +688,7 @@ class FruitDiameterService:
 
         effective_calib_path = self._resolve_calib_path(calib_path or (manifest["calib_path"] if manifest else None))
         disp = self._read_disp(effective_disp_path)
-        q = self._get_rectify_context(effective_calib_path, disp.shape[1], disp.shape[0]).q
+        q = self._get_rectify_data(effective_calib_path, disp.shape[1], disp.shape[0])[2]
         actual_patch = int(patch_size or self.config.patch_size)
 
         if point1 and point2:
@@ -1013,10 +699,7 @@ class FruitDiameterService:
             targets_to_measure = [{"index": target_index, "label": None, "confidence": None, "bbox": bbox}]
         else:
             mode = "targets"
-            if manifest:
-                detections = manifest.get("measurement_detections") or manifest.get("detections", [])
-            else:
-                detections = []
+            detections = manifest.get("detections", []) if manifest else []
             if target_index is not None:
                 if target_index < 0 or target_index >= len(detections):
                     raise ValueError("target_index out of range")
@@ -1079,11 +762,6 @@ class FruitDiameterService:
                 "label": measured.get("label"),
                 "confidence": measured.get("confidence"),
                 "bbox": current_bbox,
-                "detection_source": measured.get("detection_source"),
-                "classification_source": measured.get("classification_source"),
-                "classification_bbox": measured.get("classification_bbox"),
-                "source_bbox": measured.get("source_bbox"),
-                "rectified_source_bbox": measured.get("rectified_source_bbox"),
             }
             try:
                 measurement = self._measure_points(disp, q, p1, p2, actual_patch)
@@ -1214,7 +892,7 @@ class FruitDiameterService:
                 detect_conf=conf,
             )
 
-        if not infer_result.get("measurement_detections"):
+        if not infer_result.get("detections"):
             empty_stats = self._stats([])
             empty_measurement = {
                 "success": True,
