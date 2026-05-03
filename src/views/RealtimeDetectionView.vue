@@ -235,6 +235,7 @@ import { ElMessage } from 'element-plus'
 import { detectRealtimeCurrentFrame, saveRealtimeReport } from '@/api/detection'
 import { useCameraPreviewSocket } from '@/composables/useCameraPreviewSocket'
 import { useCameraWorkspace } from '@/composables/useCameraWorkspace'
+import { translateFruitLabel, translateRipenessLabel } from '@/utils/labelMap'
 
 function createEmptySummary() {
   return {
@@ -631,9 +632,9 @@ export default defineComponent({
 
     const targetFruitLabel = (target) => {
       if (target?.source_mode === 'dual') {
-        return target?.classification?.class || target?.label || '未识别'
+        return translateFruitLabel(target?.classification?.class || target?.label || '未识别')
       }
-      return target?.fruit_class || target?.label || '未识别'
+      return translateFruitLabel(target?.fruit_class || target?.label || '未识别')
     }
 
     const targetFruitConfidence = (target) => {
@@ -645,7 +646,7 @@ export default defineComponent({
       return `${(Number(confidence) * 100).toFixed(1)}%`
     }
 
-    const targetRipenessLabel = (target) => target?.ripeness?.class || '-'
+    const targetRipenessLabel = (target) => translateRipenessLabel(target?.ripeness?.class)
     const targetRipenessConfidence = (target) => {
       if (target?.ripeness?.confidence === null || target?.ripeness?.confidence === undefined) {
         return '-'

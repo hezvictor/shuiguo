@@ -22,6 +22,24 @@
         <span>{{ errorMessage }}</span>
       </div>
 
+      <section v-if="taskProgressVisible" class="panel-card progress-card">
+        <div class="panel-header">
+          <div>
+            <h2>任务进度</h2>
+            <p>{{ taskProgressDescription }}</p>
+          </div>
+          <span class="progress-badge">{{ taskProgressPercentText }}</span>
+        </div>
+        <div class="progress-track">
+          <div class="progress-fill" :style="{ width: `${taskProgressPercent}%` }"></div>
+        </div>
+        <div class="progress-meta">
+          <span>已处理 {{ taskProcessedItems }} / {{ taskTotalItems }} 组</span>
+          <span v-if="taskCurrentLabel">当前：{{ taskCurrentLabel }}</span>
+          <span>状态：{{ taskStatusLabel }}</span>
+        </div>
+      </section>
+
       <section class="workspace-grid">
         <div class="workspace-main">
           <section class="panel-card">
@@ -250,10 +268,10 @@
                 <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
               </el-table-column>
               <el-table-column label="种类" min-width="140">
-                <template #default="{ row }">{{ row.classification?.class || '-' }}</template>
+                <template #default="{ row }">{{ translateFruitLabel(row.classification?.class) }}</template>
               </el-table-column>
               <el-table-column label="熟度" min-width="180">
-                <template #default="{ row }">{{ row.ripeness?.predicted_class || '-' }}</template>
+                <template #default="{ row }">{{ translateRipenessLabel(row.ripeness?.predicted_class) }}</template>
               </el-table-column>
               <el-table-column label="果径(mm)" width="110">
                 <template #default="{ row }">{{ formatDiameter(row.diameter?.distance_mm) }}</template>
@@ -281,6 +299,7 @@ import {
   getDetectionHistoryList
 } from '@/api/detection'
 import { dismissHistoryId, loadDismissedIds, restoreHistoryId, saveDismissedIds } from '@/utils/imageDetectionWorkspace'
+import { translateFruitLabel, translateRipenessLabel } from '@/utils/labelMap'
 
 export default {
   name: 'ImageDetectionView',
@@ -293,6 +312,10 @@ export default {
       },
       submitting: false,
       loadingRecent: false,
+      taskPolling: false,
+      activeTaskId: null,
+      activeTaskDetail: null,
+      taskPollTimer: null,
       errorMessage: '',
       recentRecords: [],
       dismissedIds: [],
@@ -312,6 +335,42 @@ export default {
         rightImageUrl: this.resolveMediaUrl(item.right_image),
         annotatedImageUrl: this.resolveMediaUrl(item.annotated_image)
       }))
+    },
+    activeTaskProgress() {
+      return this.activeTaskDetail?.detail_data?.progress || this.activeTaskDetail?.summary?.progress || null
+    },
+    taskProgressVisible() {
+      return Boolean(this.activeTaskId && this.activeTaskProgress)
+    },
+    taskProcessedItems() {
+      return Number(this.activeTaskProgress?.processed_items || 0)
+    },
+    taskTotalItems() {
+      return Number(this.activeTaskProgress?.total_items || this.activeTaskDetail?.input_count || 0)
+    },
+    taskProgressPercent() {
+      return Number(this.activeTaskProgress?.progress_percent || 0)
+    },
+    taskProgressPercentText() {
+      return `${this.taskProgressPercent.toFixed(0)}%`
+    },
+    taskCurrentLabel() {
+      return this.activeTaskProgress?.current_item_label || ''
+    },
+    taskStatusLabel() {
+      return this.activeTaskDetail?.status_display || this.activeTaskDetail?.status || '-'
+    },
+    taskProgressDescription() {
+      if (!this.activeTaskDetail) {
+        return '正在准备任务...'
+      }
+      if (this.taskCurrentLabel) {
+        return `正在串行处理：${this.taskCurrentLabel}`
+      }
+      if (this.isTaskTerminalStatus(this.activeTaskDetail.status)) {
+        return '后台任务已完成，结果已写入历史记录。'
+      }
+      return '后台任务正在按组串行处理，上一组完成后才会进入下一组。'
     }
   },
   mounted() {
@@ -319,6 +378,7 @@ export default {
     this.fetchRecentResults()
   },
   beforeUnmount() {
+    this.stopTaskPolling()
     this.resetPendingUploads()
   },
   methods: {
@@ -388,11 +448,21 @@ export default {
       this.submitting = true
       try {
         const res = await createImageDetectionTask(formData)
+        this.activeTaskId = res.history_id
+        this.activeTaskDetail = {
+          id: res.history_id,
+          title: res.title,
+          status: res.task_status,
+          summary: res.summary,
+          detail_data: res.detail_data,
+          input_count: res.summary?.input_count || this.singleInputs.length + this.diameterInputs.length
+        }
+        this.startTaskPolling(res.history_id)
         restoreHistoryId(res.history_id)
         this.dismissedIds = loadDismissedIds()
         this.resetPendingUploads()
         await this.fetchRecentResults()
-        ElMessage.success('图片检测完成，结果已写入检测历史。')
+        ElMessage.success('检测任务已创建，后台会按组串行处理。')
       } catch (error) {
         console.error('create image detection task failed', error)
         this.errorMessage = error?.response?.data?.error || error.message || '图片检测失败，请稍后重试。'
@@ -411,6 +481,7 @@ export default {
         this.recentRecords = (res.results || res || []).map((item) => ({
           ...item
         }))
+        this.resumePendingTaskPolling()
         this.errorMessage = ''
       } catch (error) {
         console.error('load recent image detection records failed', error)
@@ -421,6 +492,88 @@ export default {
     },
     dismissRecord(id) {
       this.dismissedIds = dismissHistoryId(id)
+    },
+    isTaskActiveStatus(status) {
+      return ['pending', 'running'].includes(status)
+    },
+    isTaskTerminalStatus(status) {
+      return ['completed', 'partial', 'failed'].includes(status)
+    },
+    updateRecentRecord(detail) {
+      const index = this.recentRecords.findIndex((item) => item.id === detail.id)
+      if (index >= 0) {
+        this.recentRecords.splice(index, 1, {
+          ...this.recentRecords[index],
+          ...detail
+        })
+        return
+      }
+      this.recentRecords = [detail, ...this.recentRecords]
+    },
+    stopTaskPolling() {
+      this.taskPolling = false
+      if (this.taskPollTimer) {
+        window.clearTimeout(this.taskPollTimer)
+        this.taskPollTimer = null
+      }
+    },
+    scheduleTaskPoll(delay = 1200) {
+      this.stopTaskPolling()
+      if (!this.activeTaskId) return
+      this.taskPolling = true
+      this.taskPollTimer = window.setTimeout(() => {
+        this.pollTaskDetail()
+      }, delay)
+    },
+    startTaskPolling(historyId) {
+      this.stopTaskPolling()
+      this.activeTaskId = historyId
+      this.pollTaskDetail()
+    },
+    resumePendingTaskPolling() {
+      if (this.activeTaskId && this.isTaskActiveStatus(this.activeTaskDetail?.status)) {
+        if (!this.taskPolling) {
+          this.scheduleTaskPoll()
+        }
+        return
+      }
+      const pendingRecord = this.recentRecords.find((item) => this.isTaskActiveStatus(item.status))
+      if (!pendingRecord) {
+        return
+      }
+      this.activeTaskId = pendingRecord.id
+      if (!this.activeTaskDetail || this.activeTaskDetail.id !== pendingRecord.id) {
+        this.activeTaskDetail = pendingRecord
+      }
+      if (!this.taskPolling) {
+        this.scheduleTaskPoll(200)
+      }
+    },
+    async pollTaskDetail() {
+      if (!this.activeTaskId) return
+      this.taskPolling = false
+      try {
+        const detail = await getDetectionHistoryDetail(this.activeTaskId)
+        this.activeTaskDetail = detail
+        this.updateRecentRecord(detail)
+        if (this.isTaskActiveStatus(detail.status)) {
+          this.scheduleTaskPoll()
+          return
+        }
+        await this.fetchRecentResults()
+        if (detail.status === 'completed') {
+          ElMessage.success('图片检测任务已完成。')
+        } else if (detail.status === 'partial') {
+          ElMessage.warning('图片检测任务已完成，但部分分组处理失败。')
+        } else if (detail.status === 'failed') {
+          ElMessage.error('图片检测任务执行失败。')
+        }
+      } catch (error) {
+        console.error('poll image detection task failed', error)
+        if (this.activeTaskId) {
+          this.scheduleTaskPoll(2000)
+        }
+      }
     },
     restoreDismissed() {
       this.dismissedIds = []
@@ -496,6 +649,12 @@ export default {
       return tags.length ? tags : ['检测']
     },
     compactSummary(record) {
+      if (this.isTaskActiveStatus(record.status)) {
+        const progress = record.summary?.progress || {}
+        return `已处理 ${progress.processed_items || 0} / ${progress.total_items || record.input_count || 0} · ${Number(
+          progress.progress_percent || 0
+        ).toFixed(0)}%`
+      }
       const summary = record.summary || {}
       const parts = [
         `输入 ${record.input_count ?? summary.input_count ?? 0} 项`,
@@ -508,7 +667,9 @@ export default {
       if (itemType === 'diameter_group') return '果径图片组'
       if (itemType === 'camera_diameter') return '双目实时果径测量'
       return '单图片输入'
-    }
+    },
+    translateFruitLabel,
+    translateRipenessLabel
   }
 }
 </script>
@@ -592,6 +753,46 @@ export default {
   background: #fef3f2;
   border: 1px solid #fecdca;
   color: #b42318;
+}
+
+.progress-card {
+  display: grid;
+  gap: 14px;
+}
+
+.progress-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: #e8f1ed;
+  color: #1f6a4d;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.progress-track {
+  width: 100%;
+  height: 14px;
+  border-radius: 999px;
+  background: #e5eee9;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #235042 0%, #4f927b 100%);
+  transition: width 0.3s ease;
+}
+
+.progress-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  color: #557064;
+  font-size: 13px;
 }
 
 .workspace-grid {

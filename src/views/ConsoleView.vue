@@ -216,6 +216,7 @@
 <script>
 import { ElMessage } from 'element-plus'
 import { getConsoleOverview, getConsoleRecent, getConsoleSystemStatus } from '@/api/console'
+import { translateFruitLabel } from '@/utils/labelMap'
 
 const TYPE_COLORS = {
   image: '#2f6c59',
@@ -314,7 +315,10 @@ export default {
       ]
     },
     fruitRankingTop() {
-      return (this.analysis.fruit_ranking || []).slice(0, 5)
+      return (this.analysis.fruit_ranking || []).slice(0, 5).map((item) => ({
+        ...item,
+        fruit: translateFruitLabel(item.fruit)
+      }))
     },
     minMaxDiameterText() {
       const min = this.formatMetric(this.diameterAnalysis.min_diameter_mm, 'mm', 2)

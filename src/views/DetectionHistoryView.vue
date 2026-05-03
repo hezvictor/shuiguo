@@ -151,10 +151,10 @@
                 <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
               </el-table-column>
               <el-table-column label="种类" min-width="140">
-                <template #default="{ row }">{{ row.classification?.class || '-' }}</template>
+                <template #default="{ row }">{{ translateFruitLabel(row.classification?.class) }}</template>
               </el-table-column>
               <el-table-column label="熟度" min-width="180">
-                <template #default="{ row }">{{ row.ripeness?.predicted_class || '-' }}</template>
+                <template #default="{ row }">{{ translateRipenessLabel(row.ripeness?.predicted_class) }}</template>
               </el-table-column>
               <el-table-column label="果径(mm)" width="110">
                 <template #default="{ row }">{{ formatNumber(row.diameter?.distance_mm) }}</template>
@@ -178,6 +178,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { deleteDetectionHistory, getDetectionHistoryDetail, getDetectionHistoryList } from '@/api/detection'
+import { translateFruitLabel, translateRipenessLabel } from '@/utils/labelMap'
 
 export default {
   name: 'DetectionHistoryView',
@@ -283,7 +284,7 @@ export default {
     const sortedFruitCounts = computed(() => {
       if (!currentDetail.value?.summary?.fruit_counts) return []
       return Object.entries(currentDetail.value.summary.fruit_counts)
-        .map(([fruit, count]) => ({ fruit, count }))
+        .map(([fruit, count]) => ({ fruit: translateFruitLabel(fruit), count }))
         .sort((a, b) => b.count - a.count)
     })
 
@@ -292,7 +293,7 @@ export default {
       const result = []
       Object.entries(currentDetail.value.summary.ripeness_counts).forEach(([fruit, ripenessMap]) => {
         Object.entries(ripenessMap).forEach(([ripeness, count]) => {
-          result.push({ fruit, ripeness, count })
+          result.push({ fruit: translateFruitLabel(fruit), ripeness: translateRipenessLabel(ripeness), count })
         })
       })
       return result
@@ -348,7 +349,9 @@ export default {
       sortedRipenessData,
       normalizedDetailItems,
       diameterStatistics,
-      historySummaryText
+      historySummaryText,
+      translateFruitLabel,
+      translateRipenessLabel
     }
   }
 }
