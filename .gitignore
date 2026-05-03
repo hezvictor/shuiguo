@@ -38,6 +38,7 @@ test_media/
 *.log
 logs/
 tmp/
+/tmp*/
 temp/
 *.tmp
 *.bak
