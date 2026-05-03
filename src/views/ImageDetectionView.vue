@@ -1,279 +1,208 @@
 <template>
   <div class="image-page">
     <div class="page-shell">
-      <section class="hero">
-        <div class="hero-copy">
+      <section class="hero card">
+        <div>
           <p class="eyebrow">Image Detection Workspace</p>
           <h1>图片检测</h1>
           <p class="hero-text">
-            页面包含两个输入框。单图片输入用于水果种类识别，或水果种类识别加熟度识别；果径图片输入用于左右图成组的果径测量。
-            两个输入框都支持直接上传图片，也支持上传压缩包后批量检测。
+            单图片输入用于种类识别或种类 + 熟度识别；果径图片输入用于左右图果径测量；混合输入用于同时完成种类 + 熟度 + 果径。
           </p>
         </div>
-        <div class="hero-status">
-          <div class="hero-badge">单图片输入：{{ singleInputs.length }} 项</div>
-          <div class="hero-badge">果径图片输入：{{ diameterInputs.length }} 项</div>
-          <div class="hero-badge">最近结果：{{ visibleRecords.length }} 条</div>
+        <div class="hero-stats">
+          <span class="badge">单图 {{ singleInputs.length }}</span>
+          <span class="badge">果径 {{ diameterInputs.length }}</span>
+          <span class="badge">混合 {{ mixedInputs.length }}</span>
+          <span class="badge">最近结果 {{ visibleRecords.length }}</span>
         </div>
       </section>
 
-      <div v-if="errorMessage" class="error-banner">
-        <strong>处理失败</strong>
-        <span>{{ errorMessage }}</span>
-      </div>
+      <div v-if="errorMessage" class="error-banner">{{ errorMessage }}</div>
 
-      <section v-if="taskProgressVisible" class="panel-card progress-card">
-        <div class="panel-header">
-          <div>
-            <h2>任务进度</h2>
-            <p>{{ taskProgressDescription }}</p>
-          </div>
-          <span class="progress-badge">{{ taskProgressPercentText }}</span>
-        </div>
-        <div class="progress-track">
-          <div class="progress-fill" :style="{ width: `${taskProgressPercent}%` }"></div>
-        </div>
-        <div class="progress-meta">
-          <span>已处理 {{ taskProcessedItems }} / {{ taskTotalItems }} 组</span>
-          <span v-if="taskCurrentLabel">当前：{{ taskCurrentLabel }}</span>
-          <span>状态：{{ taskStatusLabel }}</span>
-        </div>
-      </section>
-
-      <section class="workspace-grid">
-        <div class="workspace-main">
-          <section class="panel-card">
-            <div class="panel-header">
+      <section class="workspace">
+        <div class="main-column">
+          <section class="card">
+            <div class="section-head">
               <div>
                 <h2>检测选项</h2>
-                <p>单图片输入默认执行水果种类识别；如需同时识别熟度，请勾选下面的选项。果径检测是否执行由是否上传果径输入决定。</p>
+                <p>勾选后，单图输入和混合输入会继续执行熟度识别。</p>
               </div>
             </div>
-
-            <div class="option-grid option-grid--single">
-              <label class="option-item">
-                <input type="checkbox" v-model="options.detectRipeness" />
-                <span>单图片同时进行熟度检测</span>
-              </label>
-            </div>
+            <label class="checkbox-row">
+              <input v-model="options.detectRipeness" type="checkbox" />
+              <span>开启熟度检测</span>
+            </label>
           </section>
 
-          <section class="panel-card">
-            <div class="panel-header">
+          <section class="card">
+            <div class="section-head">
               <div>
                 <h2>单图片输入</h2>
-                <p>支持上传单张或多张图片，也支持上传文件夹压缩包。压缩包中的所有可识别图片都会参与检测。</p>
+                <p>支持图片和 ZIP。只上传这里时，只做种类/熟度，不做果径。</p>
               </div>
             </div>
-
-            <div class="upload-area" @click="$refs.singleInput.click()">
-              <div class="upload-content">
-                <span class="upload-icon">图</span>
-                <p class="upload-text">点击选择单图片或压缩包</p>
-                <p class="upload-hint">支持 JPG / PNG / WEBP / BMP / ZIP，可一次选择多个文件</p>
-              </div>
-              <input
-                ref="singleInput"
-                type="file"
-                multiple
-                accept="image/*,.zip"
-                style="display: none"
-                @change="onSingleInputsSelected"
-              />
+            <div class="upload-box" @click="$refs.singleInput.click()">
+              <strong>选择单图片或 ZIP</strong>
+              <span>支持 JPG / PNG / WEBP / BMP / ZIP</span>
+              <input ref="singleInput" type="file" multiple accept="image/*,.zip" hidden @change="onSingleInputsSelected" />
             </div>
-
             <div v-if="singleInputs.length" class="preview-grid">
               <article v-for="item in singleInputs" :key="item.uid" class="preview-card">
                 <button class="remove-btn" @click.stop="removeSingleInput(item.uid)">×</button>
-                <div v-if="item.previewUrl" class="preview-visual">
-                  <img :src="item.previewUrl" :alt="item.name" class="preview-image" />
-                </div>
-                <div v-else class="archive-placeholder">ZIP</div>
-                <div class="preview-meta">
-                  <strong>{{ item.name }}</strong>
-                  <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
-                </div>
+                <img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.name" class="preview-image" />
+                <div v-else class="archive-box">ZIP</div>
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
               </article>
             </div>
           </section>
 
-          <section class="panel-card">
-            <div class="panel-header">
+          <section class="card">
+            <div class="section-head">
               <div>
                 <h2>果径图片输入</h2>
-                <p>
-                  直接上传时，文件名需包含 left 或 right，系统会自动配对；上传压缩包时，要求一级目录下只包含文件夹，每个二级目录内必须恰好有一张 left 图和一张 right 图。
-                </p>
+                <p>支持左右图片直接上传，或按分组规则组织的 ZIP。只上传这里时，只做果径。</p>
               </div>
             </div>
-
-            <div class="upload-area" @click="$refs.diameterInput.click()">
-              <div class="upload-content">
-                <span class="upload-icon">径</span>
-                <p class="upload-text">点击选择果径图片或压缩包</p>
-                <p class="upload-hint">支持左右图图片或 ZIP；ZIP 内部目录结构必须符合果径分组规则</p>
-              </div>
-              <input
-                ref="diameterInput"
-                type="file"
-                multiple
-                accept="image/*,.zip"
-                style="display: none"
-                @change="onDiameterInputsSelected"
-              />
+            <div class="upload-box" @click="$refs.diameterInput.click()">
+              <strong>选择果径图片或 ZIP</strong>
+              <span>文件名需包含 left / right，或 ZIP 内按分组目录组织</span>
+              <input ref="diameterInput" type="file" multiple accept="image/*,.zip" hidden @change="onDiameterInputsSelected" />
             </div>
-
             <div v-if="diameterInputs.length" class="preview-grid">
               <article v-for="item in diameterInputs" :key="item.uid" class="preview-card">
                 <button class="remove-btn" @click.stop="removeDiameterInput(item.uid)">×</button>
-                <div v-if="item.previewUrl" class="preview-visual">
-                  <img :src="item.previewUrl" :alt="item.name" class="preview-image" />
-                </div>
-                <div v-else class="archive-placeholder">{{ item.isArchive ? 'ZIP' : '图' }}</div>
-                <div class="preview-meta">
-                  <strong>{{ item.name }}</strong>
-                  <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
-                </div>
+                <img v-if="item.previewUrl" :src="item.previewUrl" :alt="item.name" class="preview-image" />
+                <div v-else class="archive-box">ZIP</div>
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
               </article>
             </div>
-            <div v-else class="empty-inline-tip">当前未上传果径输入；如果没有果径数据，开始检测时将自动跳过果径测量。</div>
           </section>
 
-          <section class="panel-card">
-            <div class="action-row">
-              <button class="btn btn-primary" :disabled="submitting" @click="submitTask">
-                {{ submitting ? '检测中...' : '开始检测并生成报告' }}
-              </button>
-              <button class="btn btn-secondary" :disabled="submitting" @click="resetPendingUploads">清空待上传</button>
-              <button class="btn btn-secondary" :disabled="loadingRecent" @click="fetchRecentResults">刷新最近结果</button>
+          <section class="card">
+            <div class="section-head">
+              <div>
+                <h2>混合输入</h2>
+                <p>只支持 ZIP。每组数据包含左图和右图；默认右图为彩图，左图为黑白图。</p>
+              </div>
             </div>
+            <div class="upload-box" @click="$refs.mixedInput.click()">
+              <strong>选择混合 ZIP</strong>
+              <span>后端会先对右图原图做 YOLO，再合并种类、熟度和果径结果</span>
+              <input ref="mixedInput" type="file" multiple accept=".zip" hidden @change="onMixedInputsSelected" />
+            </div>
+            <div v-if="mixedInputs.length" class="preview-grid">
+              <article v-for="item in mixedInputs" :key="item.uid" class="preview-card">
+                <button class="remove-btn" @click.stop="removeMixedInput(item.uid)">×</button>
+                <div class="archive-box">ZIP</div>
+                <strong>{{ item.name }}</strong>
+                <span>{{ item.kindLabel }} · {{ formatFileSize(item.size) }}</span>
+              </article>
+            </div>
+          </section>
+
+          <section class="card action-card">
+            <button class="btn primary" :disabled="submitting" @click="submitTask">
+              {{ submitting ? '检测中...' : '开始检测并生成报告' }}
+            </button>
+            <button class="btn" :disabled="submitting" @click="resetPendingUploads">清空待上传</button>
+            <button class="btn" :disabled="loadingRecent" @click="fetchRecentResults">刷新最近结果</button>
+          </section>
+
+          <section v-if="taskProgressVisible" class="card progress-card">
+            <div class="section-head">
+              <div>
+                <h2>任务进度</h2>
+                <p>{{ taskProgressDescription }}</p>
+              </div>
+              <strong>{{ taskProgressPercentText }}</strong>
+            </div>
+            <div class="progress-track">
+              <div class="progress-fill" :style="{ width: `${taskProgressPercent}%` }"></div>
+            </div>
+            <p class="progress-meta">
+              已处理 {{ taskProcessedItems }} / {{ taskTotalItems }}
+              <span v-if="taskCurrentLabel"> · 当前 {{ taskCurrentLabel }}</span>
+              <span> · 状态 {{ taskStatusLabel }}</span>
+            </p>
           </section>
         </div>
 
-        <div class="workspace-side">
-          <section class="panel-card">
-            <div class="panel-header">
+        <aside class="side-column">
+          <section class="card">
+            <div class="section-head">
               <div>
-                <h2>最近图片检测结果</h2>
-                <p>这些记录来自后端检测历史；关闭当前页面后仍会保留。</p>
+                <h2>最近结果</h2>
+                <p>结果来自后端历史记录。</p>
               </div>
-              <button v-if="dismissedIds.length" class="btn btn-secondary btn-mini" @click="restoreDismissed">
-                恢复隐藏 {{ dismissedIds.length }}
-              </button>
+              <button v-if="dismissedIds.length" class="btn small" @click="restoreDismissed">恢复隐藏 {{ dismissedIds.length }}</button>
             </div>
-
-            <div v-if="loadingRecent" class="empty-inline-tip">正在加载最近结果...</div>
+            <div v-if="loadingRecent" class="empty-state">正在加载...</div>
             <div v-else-if="visibleRecords.length" class="result-list">
               <article v-for="record in visibleRecords" :key="record.id" class="result-card">
                 <button class="remove-btn" @click="dismissRecord(record.id)">×</button>
-                <div class="result-main">
-                  <div class="result-copy">
-                    <strong>{{ compactTitle(record) }}</strong>
-                    <div class="result-tags">
-                      <span class="result-tag">{{ sourceLabel(record) }}</span>
-                      <span
-                        v-for="tag in operationTags(record)"
-                        :key="`${record.id}-${tag}`"
-                        class="result-tag result-tag--accent"
-                      >
-                        {{ tag }}
-                      </span>
-                    </div>
-                    <span>{{ formatDateTime(record.created_at) }}</span>
-                    <span>{{ compactSummary(record) }}</span>
-                  </div>
-                  <div class="result-actions">
-                    <button class="btn btn-secondary btn-mini" @click="viewDetail(record)">查看详情</button>
-                    <button
-                      v-if="record.report_file || record.report_url"
-                      class="btn btn-success btn-mini"
-                      @click="downloadReport(record)"
-                    >
-                      下载报告
-                    </button>
-                    <button class="btn btn-secondary btn-mini" @click="goToHistory">检测历史</button>
-                  </div>
+                <div class="result-top">
+                  <strong>{{ compactTitle(record) }}</strong>
+                  <span>{{ formatDateTime(record.created_at) }}</span>
                 </div>
-
-                <div class="result-source-panel">
-                  <span class="result-source-label">输入源</span>
-                  <div v-if="record.source_entries?.length" class="result-source-list">
-                    <template v-for="(entry, index) in record.source_entries" :key="`${record.id}-source-${index}`">
-                      <a
-                        v-if="entry.url"
-                        class="result-source-chip result-source-chip--link"
-                        :href="entry.url"
-                        target="_blank"
-                        rel="noopener"
-                      >
-                        {{ entry.label }}
-                      </a>
-                      <span v-else class="result-source-chip">
-                        {{ entry.label }}
-                      </span>
-                    </template>
-                  </div>
-                  <span v-else class="result-source-empty">暂无输入源名称</span>
+                <div class="tag-row">
+                  <span class="tag">{{ sourceLabel(record) }}</span>
+                  <span v-for="tag in operationTags(record)" :key="`${record.id}-${tag}`" class="tag accent">{{ tag }}</span>
+                </div>
+                <p class="summary-text">{{ compactSummary(record) }}</p>
+                <div class="action-row">
+                  <button class="btn small" @click="viewDetail(record)">查看详情</button>
+                  <button v-if="record.report_file || record.report_url" class="btn small primary" @click="downloadReport(record)">下载报告</button>
+                  <button class="btn small" @click="goToHistory">历史记录</button>
                 </div>
               </article>
             </div>
-            <div v-else class="empty-inline-tip">暂无图片检测结果，提交一次任务后会显示在这里。</div>
+            <div v-else class="empty-state">暂无结果</div>
           </section>
-        </div>
+        </aside>
       </section>
 
       <el-dialog v-model="detailVisible" title="图片检测详情" width="88%" :close-on-click-modal="false">
         <div v-if="currentDetail" class="detail-shell">
-          <div class="detail-summary">
-            <p><strong>任务标题：</strong>{{ currentDetail.title || `图片检测 #${currentDetail.id}` }}</p>
-            <p><strong>检测时间：</strong>{{ formatDateTime(currentDetail.created_at) }}</p>
-            <p><strong>任务状态：</strong>{{ currentDetail.status_display || currentDetail.status }}</p>
-            <p><strong>目标总数：</strong>{{ currentDetail.summary?.total_targets ?? 0 }}</p>
-          </div>
+          <p><strong>标题：</strong>{{ currentDetail.title || `图片检测 #${currentDetail.id}` }}</p>
+          <p><strong>时间：</strong>{{ formatDateTime(currentDetail.created_at) }}</p>
+          <p><strong>状态：</strong>{{ currentDetail.status_display || currentDetail.status }}</p>
+          <p><strong>目标总数：</strong>{{ currentDetail.summary?.total_targets ?? 0 }}</p>
 
-          <div
-            v-for="(item, index) in normalizedDetailItems"
-            :key="`${item.display_name}-${index}`"
-            class="detail-item"
-          >
-            <div class="panel-header">
+          <div v-for="(item, index) in normalizedDetailItems" :key="`${item.display_name}-${index}`" class="detail-item">
+            <div class="section-head">
               <div>
-                <h2>{{ item.display_name }}</h2>
-                <p>
-                  {{ detailTypeLabel(item.item_type) }}
-                  <span v-if="item.archive_name"> · {{ item.archive_name }}</span>
-                  <span v-if="item.archive_path"> · {{ item.archive_path }}</span>
-                </p>
+                <h3>{{ item.display_name }}</h3>
+                <p>{{ detailTypeLabel(item.item_type) }}</p>
               </div>
             </div>
-
-            <div class="detail-image-grid">
-              <figure v-if="item.originalImageUrl" class="detail-figure">
-                <img :src="item.originalImageUrl" alt="original" class="detail-image" />
-                <figcaption>原图</figcaption>
+            <div class="detail-images">
+              <figure v-if="item.originalImageUrl">
+                <img :src="item.originalImageUrl" alt="original" />
+                <figcaption>左图 / 原图</figcaption>
               </figure>
-              <figure v-if="item.rightImageUrl" class="detail-figure">
-                <img :src="item.rightImageUrl" alt="right original" class="detail-image" />
+              <figure v-if="item.rightImageUrl">
+                <img :src="item.rightImageUrl" alt="right" />
                 <figcaption>右图</figcaption>
               </figure>
-              <figure v-if="item.annotatedImageUrl" class="detail-figure">
-                <img :src="item.annotatedImageUrl" alt="annotated" class="detail-image" />
-                <figcaption>检测结果</figcaption>
+              <figure v-if="item.annotatedImageUrl">
+                <img :src="item.annotatedImageUrl" alt="annotated" />
+                <figcaption>检测结果图</figcaption>
               </figure>
             </div>
 
             <el-table :data="item.targets || []" border style="width: 100%">
-              <el-table-column prop="target_index" label="目标序号" width="90" />
-              <el-table-column label="边界框" min-width="150">
+              <el-table-column label="边界框" min-width="160">
                 <template #default="{ row }">[{{ (row.bbox || []).join(', ') }}]</template>
               </el-table-column>
               <el-table-column label="种类" min-width="140">
                 <template #default="{ row }">{{ translateFruitLabel(row.classification?.class) }}</template>
               </el-table-column>
-              <el-table-column label="熟度" min-width="180">
+              <el-table-column label="熟度" min-width="160">
                 <template #default="{ row }">{{ translateRipenessLabel(row.ripeness?.predicted_class) }}</template>
               </el-table-column>
-              <el-table-column label="果径(mm)" width="110">
+              <el-table-column label="果径(mm)" width="120">
                 <template #default="{ row }">{{ formatDiameter(row.diameter?.distance_mm) }}</template>
               </el-table-column>
               <el-table-column label="状态" min-width="120">
@@ -281,11 +210,12 @@
               </el-table-column>
             </el-table>
           </div>
-
-          <div class="detail-footer">
-            <button class="btn btn-secondary" @click="detailVisible = false">关闭窗口</button>
-          </div>
         </div>
+        <template #footer>
+          <div class="detail-actions">
+            <button class="btn" @click="closeDetailDialog">退出界面</button>
+          </div>
+        </template>
       </el-dialog>
     </div>
   </div>
@@ -293,11 +223,7 @@
 
 <script>
 import { ElMessage } from 'element-plus'
-import {
-  createImageDetectionTask,
-  getDetectionHistoryDetail,
-  getDetectionHistoryList
-} from '@/api/detection'
+import { createImageDetectionTask, getDetectionHistoryDetail, getDetectionHistoryList } from '@/api/detection'
 import { dismissHistoryId, loadDismissedIds, restoreHistoryId, saveDismissedIds } from '@/utils/imageDetectionWorkspace'
 import { translateFruitLabel, translateRipenessLabel } from '@/utils/labelMap'
 
@@ -307,6 +233,7 @@ export default {
     return {
       singleInputs: [],
       diameterInputs: [],
+      mixedInputs: [],
       options: {
         detectRipeness: true
       },
@@ -361,16 +288,10 @@ export default {
       return this.activeTaskDetail?.status_display || this.activeTaskDetail?.status || '-'
     },
     taskProgressDescription() {
-      if (!this.activeTaskDetail) {
-        return '正在准备任务...'
-      }
-      if (this.taskCurrentLabel) {
-        return `正在串行处理：${this.taskCurrentLabel}`
-      }
-      if (this.isTaskTerminalStatus(this.activeTaskDetail.status)) {
-        return '后台任务已完成，结果已写入历史记录。'
-      }
-      return '后台任务正在按组串行处理，上一组完成后才会进入下一组。'
+      if (!this.activeTaskDetail) return '正在准备任务...'
+      if (this.taskCurrentLabel) return `正在处理：${this.taskCurrentLabel}`
+      if (this.isTaskTerminalStatus(this.activeTaskDetail.status)) return '任务已完成，结果已写入历史记录。'
+      return '后台正在顺序处理输入组。'
     }
   },
   mounted() {
@@ -398,6 +319,14 @@ export default {
       })
       event.target.value = ''
     },
+    onMixedInputsSelected(event) {
+      const files = Array.from(event.target.files || [])
+      files.forEach((file) => {
+        if (!this.isArchiveFile(file)) return
+        this.mixedInputs.push(this.buildUploadItem(file))
+      })
+      event.target.value = ''
+    },
     isSupportedUpload(file) {
       const lowerName = String(file.name || '').toLowerCase()
       return lowerName.endsWith('.zip') || file.type.startsWith('image/')
@@ -414,7 +343,7 @@ export default {
         size: file.size,
         isArchive,
         previewUrl: !isArchive && file.type.startsWith('image/') ? URL.createObjectURL(file) : '',
-        kindLabel: isArchive ? '压缩包' : '图片'
+        kindLabel: isArchive ? 'ZIP' : '图片'
       }
     },
     removeSingleInput(uid) {
@@ -427,23 +356,23 @@ export default {
       if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
       this.diameterInputs = this.diameterInputs.filter((item) => item.uid !== uid)
     },
+    removeMixedInput(uid) {
+      const target = this.mixedInputs.find((item) => item.uid === uid)
+      if (target?.previewUrl) URL.revokeObjectURL(target.previewUrl)
+      this.mixedInputs = this.mixedInputs.filter((item) => item.uid !== uid)
+    },
     async submitTask() {
       this.errorMessage = ''
-
-      if (!this.singleInputs.length && !this.diameterInputs.length) {
-        this.errorMessage = '请至少上传单图片输入或果径图片输入。'
+      if (!this.singleInputs.length && !this.diameterInputs.length && !this.mixedInputs.length) {
+        this.errorMessage = '请至少上传单图片输入、果径图片输入或混合 ZIP。'
         return
       }
 
       const formData = new FormData()
       formData.append('detect_ripeness', this.options.detectRipeness ? 'true' : 'false')
-
-      this.singleInputs.forEach((item) => {
-        formData.append('single_inputs', item.file)
-      })
-      this.diameterInputs.forEach((item) => {
-        formData.append('diameter_inputs', item.file)
-      })
+      this.singleInputs.forEach((item) => formData.append('single_inputs', item.file))
+      this.diameterInputs.forEach((item) => formData.append('diameter_inputs', item.file))
+      this.mixedInputs.forEach((item) => formData.append('mixed_inputs', item.file))
 
       this.submitting = true
       try {
@@ -455,14 +384,14 @@ export default {
           status: res.task_status,
           summary: res.summary,
           detail_data: res.detail_data,
-          input_count: res.summary?.input_count || this.singleInputs.length + this.diameterInputs.length
+          input_count: res.summary?.input_count || this.singleInputs.length + this.diameterInputs.length + this.mixedInputs.length
         }
         this.startTaskPolling(res.history_id)
         restoreHistoryId(res.history_id)
         this.dismissedIds = loadDismissedIds()
         this.resetPendingUploads()
         await this.fetchRecentResults()
-        ElMessage.success('检测任务已创建，后台会按组串行处理。')
+        ElMessage.success('图片检测任务已创建。')
       } catch (error) {
         console.error('create image detection task failed', error)
         this.errorMessage = error?.response?.data?.error || error.message || '图片检测失败，请稍后重试。'
@@ -478,9 +407,7 @@ export default {
           page: 1,
           page_size: 20
         })
-        this.recentRecords = (res.results || res || []).map((item) => ({
-          ...item
-        }))
+        this.recentRecords = (res.results || res || []).map((item) => ({ ...item }))
         this.resumePendingTaskPolling()
         this.errorMessage = ''
       } catch (error) {
@@ -502,10 +429,7 @@ export default {
     updateRecentRecord(detail) {
       const index = this.recentRecords.findIndex((item) => item.id === detail.id)
       if (index >= 0) {
-        this.recentRecords.splice(index, 1, {
-          ...this.recentRecords[index],
-          ...detail
-        })
+        this.recentRecords.splice(index, 1, { ...this.recentRecords[index], ...detail })
         return
       }
       this.recentRecords = [detail, ...this.recentRecords]
@@ -532,22 +456,16 @@ export default {
     },
     resumePendingTaskPolling() {
       if (this.activeTaskId && this.isTaskActiveStatus(this.activeTaskDetail?.status)) {
-        if (!this.taskPolling) {
-          this.scheduleTaskPoll()
-        }
+        if (!this.taskPolling) this.scheduleTaskPoll()
         return
       }
       const pendingRecord = this.recentRecords.find((item) => this.isTaskActiveStatus(item.status))
-      if (!pendingRecord) {
-        return
-      }
+      if (!pendingRecord) return
       this.activeTaskId = pendingRecord.id
       if (!this.activeTaskDetail || this.activeTaskDetail.id !== pendingRecord.id) {
         this.activeTaskDetail = pendingRecord
       }
-      if (!this.taskPolling) {
-        this.scheduleTaskPoll(200)
-      }
+      if (!this.taskPolling) this.scheduleTaskPoll(200)
     },
     async pollTaskDetail() {
       if (!this.activeTaskId) return
@@ -561,18 +479,12 @@ export default {
           return
         }
         await this.fetchRecentResults()
-        if (detail.status === 'completed') {
-          ElMessage.success('图片检测任务已完成。')
-        } else if (detail.status === 'partial') {
-          ElMessage.warning('图片检测任务已完成，但部分分组处理失败。')
-        } else if (detail.status === 'failed') {
-          ElMessage.error('图片检测任务执行失败。')
-        }
+        if (detail.status === 'completed') ElMessage.success('图片检测任务已完成。')
+        if (detail.status === 'partial') ElMessage.warning('图片检测任务已完成，但部分输入处理失败。')
+        if (detail.status === 'failed') ElMessage.error('图片检测任务执行失败。')
       } catch (error) {
         console.error('poll image detection task failed', error)
-        if (this.activeTaskId) {
-          this.scheduleTaskPoll(2000)
-        }
+        if (this.activeTaskId) this.scheduleTaskPoll(2000)
       }
     },
     restoreDismissed() {
@@ -587,6 +499,10 @@ export default {
         console.error('load image detection detail failed', error)
         ElMessage.error('获取详情失败')
       }
+    },
+    closeDetailDialog() {
+      this.detailVisible = false
+      this.currentDetail = null
     },
     downloadReport(record) {
       const targetUrl = record.report_url || this.resolveMediaUrl(record.report_file)
@@ -609,18 +525,13 @@ export default {
       if (path.startsWith('http://') || path.startsWith('https://') || path.startsWith('/media/')) return path
       return `/media/${String(path).replace(/^\/+/, '')}`
     },
-    resolveRecordCover(record) {
-      return record.cover_image_url || this.resolveMediaUrl(record.cover_image)
-    },
     resetPendingUploads() {
-      this.singleInputs.forEach((item) => {
-        if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
-      })
-      this.diameterInputs.forEach((item) => {
+      ;[...this.singleInputs, ...this.diameterInputs, ...this.mixedInputs].forEach((item) => {
         if (item.previewUrl) URL.revokeObjectURL(item.previewUrl)
       })
       this.singleInputs = []
       this.diameterInputs = []
+      this.mixedInputs = []
     },
     formatDateTime(value) {
       return value ? new Date(value).toLocaleString('zh-CN') : '-'
@@ -646,6 +557,7 @@ export default {
       if (record.options?.detect_classification) tags.push('种类')
       if (record.options?.detect_ripeness) tags.push('熟度')
       if (record.options?.detect_diameter) tags.push('果径')
+      if (record.options?.has_mixed_inputs) tags.push('混合')
       return tags.length ? tags : ['检测']
     },
     compactSummary(record) {
@@ -656,15 +568,13 @@ export default {
         ).toFixed(0)}%`
       }
       const summary = record.summary || {}
-      const parts = [
-        `输入 ${record.input_count ?? summary.input_count ?? 0} 项`,
-        `目标 ${summary.total_targets ?? 0} 个`
-      ]
-      if (summary.valid_measurements) parts.push(`有效果径 ${summary.valid_measurements} 个`)
+      const parts = [`输入 ${record.input_count ?? summary.input_count ?? 0}`, `目标 ${summary.total_targets ?? 0}`]
+      if (summary.valid_measurements) parts.push(`有效果径 ${summary.valid_measurements}`)
       return parts.join(' · ')
     },
     detailTypeLabel(itemType) {
       if (itemType === 'diameter_group') return '果径图片组'
+      if (itemType === 'mixed_group') return '混合图片组'
       if (itemType === 'camera_diameter') return '双目实时果径测量'
       return '单图片输入'
     },
@@ -676,7 +586,7 @@ export default {
 
 <style scoped>
 .image-page {
-  padding: 16px;
+  padding: 20px;
   min-height: 100%;
   background:
     radial-gradient(circle at top left, rgba(44, 123, 83, 0.16), transparent 26%),
@@ -690,418 +600,203 @@ export default {
   gap: 16px;
 }
 
-.hero,
-.panel-card {
+.card {
   border-radius: 24px;
-  border: none;
   background: rgba(255, 255, 255, 0.95);
   box-shadow: 0 20px 42px rgba(27, 51, 40, 0.08);
+  padding: 20px;
 }
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(260px, 0.7fr);
-  gap: 18px;
-  padding: 22px 24px;
-  background: linear-gradient(135deg, #173b32 0%, #235042 58%, #3a7a65 100%);
-  color: #f6fbf8;
+  gap: 20px;
+  grid-template-columns: minmax(0, 1.3fr) auto;
 }
 
 .eyebrow {
-  margin: 0 0 10px;
-  font-size: 12px;
-  letter-spacing: 0.18em;
+  margin: 0 0 8px;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: rgba(246, 251, 248, 0.72);
+  color: #3d8063;
+  font-weight: 700;
+  font-size: 12px;
 }
 
-.hero h1 {
+h1,
+h2,
+h3,
+p {
   margin: 0;
-  font-size: 30px;
-  line-height: 1.1;
 }
 
 .hero-text {
-  margin: 10px 0 0;
-  line-height: 1.65;
-  font-size: 14px;
-  color: rgba(246, 251, 248, 0.86);
-}
-
-.hero-status {
-  display: grid;
-  gap: 12px;
-  align-content: start;
-}
-
-.hero-badge {
-  min-height: 38px;
-  display: flex;
-  align-items: center;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.12);
-  font-size: 13px;
-}
-
-.error-banner {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  padding: 14px 16px;
-  border-radius: 18px;
-  background: #fef3f2;
-  border: 1px solid #fecdca;
-  color: #b42318;
-}
-
-.progress-card {
-  display: grid;
-  gap: 14px;
-}
-
-.progress-badge {
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  padding: 0 12px;
-  border-radius: 999px;
-  background: #e8f1ed;
-  color: #1f6a4d;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.progress-track {
-  width: 100%;
-  height: 14px;
-  border-radius: 999px;
-  background: #e5eee9;
-  overflow: hidden;
-}
-
-.progress-fill {
-  height: 100%;
-  border-radius: 999px;
-  background: linear-gradient(90deg, #235042 0%, #4f927b 100%);
-  transition: width 0.3s ease;
-}
-
-.progress-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-  color: #557064;
-  font-size: 13px;
-}
-
-.workspace-grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.35fr) 360px;
-  gap: 16px;
-  align-items: start;
-}
-
-.workspace-main,
-.workspace-side {
-  display: grid;
-  gap: 16px;
-}
-
-.workspace-side {
-  position: sticky;
-  top: 16px;
-}
-
-.panel-card {
-  padding: 18px;
-}
-
-.panel-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.panel-header h2 {
-  margin: 0 0 4px;
-  font-size: 16px;
-  color: #18352b;
-}
-
-.panel-header p {
-  margin: 0;
-  line-height: 1.6;
-  font-size: 13px;
-  color: #557064;
-}
-
-.option-grid {
-  display: grid;
-  gap: 12px;
-}
-
-.option-grid--single {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.option-item {
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  min-height: 46px;
-  padding: 0 14px;
-  border-radius: 16px;
-  background: #f6faf7;
-  color: #18352b;
-  font-size: 14px;
-}
-
-.empty-inline-tip {
-  color: #557064;
+  margin-top: 10px;
+  color: #4a5a52;
   line-height: 1.7;
 }
 
-.upload-area {
-  border: 2px dashed #cdd9d3;
-  border-radius: 20px;
-  padding: 28px 18px;
-  text-align: center;
-  cursor: pointer;
-  transition: all 0.25s ease;
-  background: linear-gradient(180deg, #f9fbfa 0%, #f2f7f4 100%);
+.hero-stats {
+  display: grid;
+  gap: 10px;
+  align-content: start;
 }
 
-.upload-area:hover {
-  border-color: #2f6c59;
-  background: #eef6f2;
-}
-
-.upload-content {
-  color: #4f685d;
-}
-
-.upload-icon {
+.badge,
+.tag {
   display: inline-flex;
-  width: 52px;
-  height: 52px;
   align-items: center;
   justify-content: center;
-  margin-bottom: 12px;
-  border-radius: 16px;
-  background: #173b32;
-  color: #f6fbf8;
-  font-size: 24px;
-  font-weight: 700;
-}
-
-.upload-text {
-  margin: 0 0 8px;
-  font-size: 16px;
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: #eef5f1;
+  color: #25503c;
+  font-size: 13px;
   font-weight: 600;
 }
 
-.upload-hint {
-  margin: 0;
-  font-size: 13px;
-  color: #7a9086;
+.tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tag.accent {
+  background: #dff2e8;
+}
+
+.error-banner {
+  border-radius: 16px;
+  background: #ffe4e4;
+  color: #b03333;
+  padding: 14px 16px;
+  font-weight: 600;
+}
+
+.workspace {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: minmax(0, 1.55fr) minmax(320px, 0.85fr);
+}
+
+.main-column,
+.side-column {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+}
+
+.section-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.section-head p {
+  color: #5b6c63;
+  line-height: 1.6;
+}
+
+.checkbox-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-weight: 600;
+}
+
+.upload-box {
+  border: 1px dashed #89b89e;
+  border-radius: 18px;
+  padding: 24px;
+  cursor: pointer;
+  display: grid;
+  gap: 6px;
+  background: linear-gradient(180deg, rgba(239, 247, 243, 0.9) 0%, rgba(250, 252, 250, 0.95) 100%);
+}
+
+.upload-box:hover {
+  border-color: #3d8063;
 }
 
 .preview-grid {
+  margin-top: 16px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
   gap: 12px;
-  margin-top: 14px;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
 }
 
 .preview-card,
 .result-card {
   position: relative;
   border-radius: 18px;
-  background: #f8fbf9;
-  border: 1px solid #e7efea;
-  overflow: hidden;
-}
-
-.preview-card {
-  padding: 10px;
-}
-
-.preview-visual {
-  border-radius: 14px;
-  overflow: hidden;
-}
-
-.preview-image,
-.result-cover,
-.detail-image {
-  width: 100%;
-  object-fit: cover;
-  border-radius: 14px;
-}
-
-.preview-image,
-.result-cover {
-  aspect-ratio: 1 / 1;
-}
-
-.archive-placeholder {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  aspect-ratio: 1 / 1;
-  border-radius: 14px;
-  background: linear-gradient(135deg, #173b32 0%, #3a7a65 100%);
-  color: #f6fbf8;
-  font-size: 24px;
-  font-weight: 700;
-}
-
-.preview-meta,
-.result-copy {
+  border: 1px solid #e2ece5;
+  background: #fff;
+  padding: 14px;
   display: grid;
-  gap: 4px;
+  gap: 8px;
 }
 
-.result-tags {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin: 2px 0;
+.preview-card strong,
+.result-card strong {
+  word-break: break-all;
 }
 
-.result-tag {
-  display: inline-flex;
-  align-items: center;
-  min-height: 22px;
-  padding: 0 8px;
-  border-radius: 999px;
-  background: #eef4f1;
-  color: #355b4d;
-  font-size: 12px;
+.preview-image,
+.detail-images img {
+  width: 100%;
+  border-radius: 14px;
+  object-fit: cover;
 }
 
-.result-tag--accent {
-  background: #e8f1ed;
-  color: #1f6a4d;
-}
-
-.preview-meta strong,
-.result-copy strong {
-  color: #18352b;
-  font-size: 14px;
-}
-
-.preview-meta span,
-.result-copy span {
-  color: #6b8579;
-  font-size: 12px;
+.archive-box {
+  min-height: 120px;
+  border-radius: 14px;
+  display: grid;
+  place-items: center;
+  background: #eef5f1;
+  color: #2f654d;
+  font-weight: 700;
 }
 
 .remove-btn {
   position: absolute;
   top: 10px;
   right: 10px;
-  z-index: 1;
   width: 28px;
   height: 28px;
   border: none;
-  border-radius: 50%;
-  background: rgba(16, 24, 40, 0.72);
+  border-radius: 999px;
+  background: rgba(14, 36, 27, 0.75);
   color: #fff;
   cursor: pointer;
 }
 
-.result-list {
-  display: grid;
-  gap: 10px;
-}
-
-.result-card {
-  padding: 14px;
-  display: grid;
-  gap: 12px;
-}
-
-.result-main {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 12px;
-}
-
-.result-actions,
+.action-card,
 .action-row {
   display: flex;
-  gap: 10px;
   flex-wrap: wrap;
-}
-
-.result-actions {
-  justify-content: flex-end;
-}
-
-.result-source-panel {
-  display: grid;
-  gap: 8px;
-  padding-top: 10px;
-  border-top: 1px solid #e4ece7;
-}
-
-.result-source-label {
-  font-size: 12px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: #557064;
-  text-transform: uppercase;
-}
-
-.result-source-list {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.result-source-chip {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: #eef4f1;
-  color: #355b4d;
-  font-size: 12px;
-  text-decoration: none;
-  max-width: 100%;
-  word-break: break-all;
-}
-
-.result-source-chip--link {
-  background: #e8f1ed;
-  color: #1f6a4d;
-}
-
-.result-source-chip--link:hover {
-  background: #dcece5;
-}
-
-.result-source-empty {
-  font-size: 12px;
-  color: #7a9086;
+  gap: 12px;
 }
 
 .btn {
-  min-width: 108px;
-  padding: 10px 16px;
   border: none;
-  border-radius: 14px;
+  border-radius: 999px;
+  padding: 10px 16px;
+  background: #eef5f1;
+  color: #204d38;
   cursor: pointer;
-  font-size: 13px;
   font-weight: 600;
-  transition: transform 0.2s ease, opacity 0.2s ease;
+}
+
+.btn.primary {
+  background: linear-gradient(135deg, #2d7d59 0%, #4b9d75 100%);
+  color: #fff;
+}
+
+.btn.small {
+  padding: 8px 12px;
+  font-size: 12px;
 }
 
 .btn:disabled {
@@ -1109,112 +804,72 @@ export default {
   cursor: not-allowed;
 }
 
-.btn:not(:disabled):hover {
-  transform: translateY(-1px);
+.result-list {
+  display: grid;
+  gap: 12px;
 }
 
-.btn-primary {
-  background: #173b32;
-  color: #fff;
+.result-top,
+.progress-meta,
+.summary-text {
+  color: #4c5d55;
 }
 
-.btn-success {
-  background: #2f6c59;
-  color: #fff;
+.empty-state {
+  color: #62746b;
+  text-align: center;
+  padding: 24px 0;
 }
 
-.btn-secondary {
-  background: #edf3ef;
-  color: #244538;
+.progress-track {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: #edf2ef;
+  overflow: hidden;
 }
 
-.btn-mini {
-  min-width: 0;
-  padding: 7px 10px;
-  font-size: 12px;
-  border-radius: 12px;
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #2d7d59 0%, #6cbc96 100%);
 }
 
 .detail-shell {
   display: grid;
-  gap: 20px;
+  gap: 18px;
 }
 
-.detail-footer {
+.detail-actions {
   display: flex;
   justify-content: flex-end;
 }
 
-.detail-summary p {
-  margin: 0 0 8px;
-}
-
 .detail-item {
   display: grid;
-  gap: 16px;
-  padding: 18px;
-  border-radius: 18px;
-  background: #f8fbf9;
-}
-
-.detail-image-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: 14px;
 }
 
-.detail-figure {
+.detail-images {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.detail-images figure {
   margin: 0;
+  display: grid;
+  gap: 8px;
 }
 
-.detail-image {
-  aspect-ratio: 4 / 3;
-}
-
-.detail-figure figcaption {
-  margin-top: 8px;
-  color: #557064;
-  text-align: center;
-}
-
-@media (max-width: 1320px) {
-  .workspace-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .workspace-side {
-    position: static;
-  }
+.detail-images figcaption {
+  color: #586961;
+  font-size: 13px;
 }
 
 @media (max-width: 980px) {
-  .hero {
+  .hero,
+  .workspace {
     grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 768px) {
-  .image-page {
-    padding: 12px;
-  }
-
-  .hero {
-    padding: 18px;
-  }
-
-  .hero h1 {
-    font-size: 26px;
-  }
-
-  .result-main,
-  .action-row,
-  .result-actions,
-  .panel-header {
-    flex-direction: column;
-  }
-
-  .result-actions {
-    justify-content: flex-start;
   }
 }
 </style>
