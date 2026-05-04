@@ -28,6 +28,7 @@ const state = reactive({
     }
   },
   captures: [],
+  stagedCaptureGroups: [],
   runtimeStatus: null
 })
 
@@ -90,6 +91,7 @@ async function saveSelection(data) {
 async function loadCaptures(params = {}) {
   const payload = await getCameraCaptures(params)
   state.captures = payload.records || []
+  state.stagedCaptureGroups = payload.staged_groups || []
   return state.captures
 }
 

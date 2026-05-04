@@ -181,7 +181,17 @@
                 <article v-for="group in pendingCaptureGroups" :key="group.stage_id" class="pending-item">
                   <div class="pending-title-row">
                     <strong>{{ group.displayName }}</strong>
-                    <span>{{ formatDateTime(group.created_at) }}</span>
+                    <div class="pending-title-actions">
+                      <span>{{ formatDateTime(group.created_at) }}</span>
+                      <button
+                        type="button"
+                        class="pending-remove"
+                        :disabled="deletingPendingStageId === group.stage_id"
+                        @click="deletePendingCaptureGroup(group.stage_id)"
+                      >
+                        ×
+                      </button>
+                    </div>
                   </div>
                   <p>{{ group.capture_mode === 'dual' ? '双目照片组' : '单摄照片组' }}</p>
                   <div class="pending-files">
@@ -281,11 +291,15 @@
 <script>
 import { computed, defineComponent, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { captureCameraImages, deleteCameraCaptureRecord, downloadCameraCaptures, saveCameraCaptureStages } from '@/api/detection'
+import {
+  captureCameraImages,
+  deleteCameraCaptureRecord,
+  deleteCameraCaptureStage,
+  downloadCameraCaptures,
+  saveCameraCaptureStages
+} from '@/api/detection'
 import CameraPreviewCard from '@/components/CameraPreviewCard.vue'
 import { useCameraWorkspace } from '@/composables/useCameraWorkspace'
-
-const PREVIEW_RELEASE_DELAY_MS = 250
 
 export default defineComponent({
   name: 'CameraConfigView',
@@ -308,10 +322,16 @@ export default defineComponent({
     const savingPending = ref(false)
     const downloadingZip = ref(false)
     const deletingRecordId = ref('')
+    const deletingPendingStageId = ref('')
     const errorMessage = ref('')
     const selectedCaptureIds = ref([])
     const previewEnabled = ref(false)
-    const pendingCaptureGroups = ref([])
+    const pendingCaptureGroups = computed(() =>
+      (state.stagedCaptureGroups || []).map((group, index) => ({
+        ...group,
+        displayName: `第${index + 1}组图片`
+      }))
+    )
 
     const registry = computed(() => state.registry)
     const captureRecords = computed(() => state.captures || [])
@@ -362,18 +382,6 @@ export default defineComponent({
       if (record.archive_name) return record.archive_name
       if (record.capture_mode === 'dual') return record.group_name || record.id
       return record.files?.[0]?.file_name || record.id
-    }
-
-    const normalizePendingGroup = (group, indexOffset = 0) => ({
-      ...group,
-      displayName: `第${pendingCaptureGroups.value.length + indexOffset + 1}组图片`
-    })
-
-    const rebuildPendingGroupNames = () => {
-      pendingCaptureGroups.value = pendingCaptureGroups.value.map((group, index) => ({
-        ...group,
-        displayName: `第${index + 1}组图片`
-      }))
     }
 
     const loadCaptureRecords = async () => {
@@ -475,25 +483,14 @@ export default defineComponent({
 
       capturing.value = true
       errorMessage.value = ''
-      const shouldResumePreview = previewEnabled.value
 
       try {
-        if (shouldResumePreview) {
-          previewEnabled.value = false
-          await new Promise((resolve) => window.setTimeout(resolve, PREVIEW_RELEASE_DELAY_MS))
-        }
-
         const response = await captureCameraImages(payload)
-        const stagedGroups = (response.staged_groups || []).map((group, index) => normalizePendingGroup(group, index))
-        pendingCaptureGroups.value = [...pendingCaptureGroups.value, ...stagedGroups]
-        rebuildPendingGroupNames()
-        ElMessage.success(`拍照完成，已加入 ${stagedGroups.length} 组待保存照片`)
+        await loadCaptureRecords()
+        ElMessage.success(`拍照完成，已加入 ${response.staged_groups?.length || 0} 组待保存照片`)
       } catch (error) {
         errorMessage.value = error?.response?.data?.error || error.message || '拍照失败'
       } finally {
-        if (shouldResumePreview) {
-          previewEnabled.value = true
-        }
         capturing.value = false
       }
     }
@@ -508,7 +505,6 @@ export default defineComponent({
         const response = await saveCameraCaptureStages({
           stage_ids: pendingCaptureGroups.value.map((group) => group.stage_id)
         })
-        pendingCaptureGroups.value = []
         selectedCaptureIds.value = []
         await loadCaptureRecords()
         ElMessage.success(`已保存 ${response.record?.group_count || 0} 组照片，ZIP 已加入结果栏`)
@@ -516,6 +512,20 @@ export default defineComponent({
         errorMessage.value = error?.response?.data?.error || error.message || '保存拍照结果失败'
       } finally {
         savingPending.value = false
+      }
+    }
+
+    const deletePendingCaptureGroup = async (stageId) => {
+      deletingPendingStageId.value = stageId
+      errorMessage.value = ''
+      try {
+        await deleteCameraCaptureStage(stageId)
+        await loadCaptureRecords()
+        ElMessage.success('待保存照片组已删除')
+      } catch (error) {
+        errorMessage.value = error?.response?.data?.error || error.message || '删除待保存照片组失败'
+      } finally {
+        deletingPendingStageId.value = ''
       }
     }
 
@@ -593,8 +603,10 @@ export default defineComponent({
       captureRecords,
       captureSelected,
       capturing,
+      deletingPendingStageId,
       downloadingZip,
       deletingRecordId,
+      deletePendingCaptureGroup,
       downloadSelectedZip,
       deleteCaptureRecord,
       dualPairLabel,
@@ -845,6 +857,29 @@ export default defineComponent({
 
 .pending-item p {
   margin: 0;
+}
+
+.pending-title-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pending-remove {
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(35, 80, 66, 0.1);
+  color: #235042;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pending-remove:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .pending-files,

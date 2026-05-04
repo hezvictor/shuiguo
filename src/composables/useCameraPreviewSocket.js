@@ -1,13 +1,14 @@
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 const DEFAULT_WS_PATH = '/ws/camera/device-preview/'
-const DEFAULT_STREAM_FPS = 6
+const DEFAULT_STREAM_FPS = 10
 
 export function useCameraPreviewSocket(options = {}) {
   const wsPath = options.wsPath || DEFAULT_WS_PATH
   const streamFps = options.streamFps || DEFAULT_STREAM_FPS
   const active = options.active
   const payload = options.payload
+  const includeFrameDataUrl = options.includeFrameDataUrl === true
   const onStatus = options.onStatus || (() => {})
   const onReady = options.onReady || (() => {})
   const onError = options.onError || (() => {})
@@ -21,6 +22,7 @@ export function useCameraPreviewSocket(options = {}) {
   let socket = null
   let reconnectTimer = null
   let manualClose = false
+  let latestFrameBlob = null
 
   const isActive = computed(() => (typeof active === 'function' ? !!active() : !!active?.value))
   const previewPayload = computed(() => {
@@ -43,6 +45,7 @@ export function useCameraPreviewSocket(options = {}) {
       imageUrl.value = ''
     }
     frameDataUrl.value = ''
+    latestFrameBlob = null
   }
 
   const closeSocket = ({ clearImage = false } = {}) => {
@@ -83,20 +86,35 @@ export function useCameraPreviewSocket(options = {}) {
     }, 1500)
   }
 
+  const blobToDataUrl = (blob) =>
+    new Promise((resolve, reject) => {
+      const reader = new FileReader()
+      reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : '')
+      reader.onerror = () => reject(reader.error || new Error('failed to read preview frame'))
+      reader.readAsDataURL(blob)
+    })
+
   const updateImage = async (data) => {
-    const buffer = data instanceof Blob ? await data.arrayBuffer() : data
-    const nextUrl = URL.createObjectURL(new Blob([buffer], { type: 'image/jpeg' }))
-    const bytes = new Uint8Array(buffer)
-    let binary = ''
-    const chunkSize = 0x8000
-    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-      const chunk = bytes.subarray(offset, offset + chunkSize)
-      binary += String.fromCharCode(...chunk)
-    }
+    const nextBlob = data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' })
+    const nextUrl = URL.createObjectURL(nextBlob)
     revokeImageUrl()
     imageUrl.value = nextUrl
-    frameDataUrl.value = `data:image/jpeg;base64,${window.btoa(binary)}`
+    latestFrameBlob = nextBlob
+    if (includeFrameDataUrl) {
+      frameDataUrl.value = await blobToDataUrl(nextBlob)
+    }
     errorMessage.value = ''
+  }
+
+  const getFrameDataUrl = async () => {
+    if (frameDataUrl.value) {
+      return frameDataUrl.value
+    }
+    if (!latestFrameBlob) {
+      return ''
+    }
+    frameDataUrl.value = await blobToDataUrl(latestFrameBlob)
+    return frameDataUrl.value
   }
 
   const handleControlMessage = (raw) => {
@@ -155,7 +173,7 @@ export function useCameraPreviewSocket(options = {}) {
     manualClose = false
     errorMessage.value = ''
     const nextSocket = new WebSocket(buildSocketUrl())
-    nextSocket.binaryType = 'arraybuffer'
+    nextSocket.binaryType = 'blob'
 
     nextSocket.onopen = () => {
       connected.value = true
@@ -219,6 +237,7 @@ export function useCameraPreviewSocket(options = {}) {
     connected,
     errorMessage,
     frameDataUrl,
+    getFrameDataUrl,
     imageUrl,
     status,
     connect,

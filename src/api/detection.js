@@ -182,6 +182,14 @@ export function saveCameraCaptureStages(data) {
   })
 }
 
+export function deleteCameraCaptureStage(stageId) {
+  return request({
+    url: `/api/camera/capture/stages/${stageId}/`,
+    method: 'delete',
+    timeout: 15000
+  })
+}
+
 export function getCameraCaptures(params = {}) {
   return request({
     url: '/api/camera/captures/',

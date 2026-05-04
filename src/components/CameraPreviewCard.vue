@@ -45,7 +45,7 @@ const { connected, errorMessage, imageUrl } = useCameraPreviewSocket({
     mode: 'single',
     camera_index: cameraIndex.value,
     detect: false,
-    fps: 4
+    fps: 10
   }))
 })
 </script>

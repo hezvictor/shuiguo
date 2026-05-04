@@ -358,14 +358,14 @@ export default defineComponent({
           left_camera_index: dualLeftCameraIndex.value,
           right_camera_index: dualRightCameraIndex.value,
           detect: false,
-          fps: 6
+          fps: 12
         }
       }
       return {
         mode: 'single',
         camera_index: singleCameraIndex.value,
         detect: false,
-        fps: 6
+        fps: 12
       }
     })
 
@@ -381,8 +381,8 @@ export default defineComponent({
     const {
       connected: previewConnected,
       errorMessage: previewErrorMessage,
-      frameDataUrl: previewFrameDataUrl,
-      imageUrl: previewImageUrl
+      imageUrl: previewImageUrl,
+      getFrameDataUrl
     } = useCameraPreviewSocket({
       active: previewActive,
       payload: previewPayload
@@ -492,6 +492,7 @@ export default defineComponent({
       runningRequest.value = true
       errorMessage.value = ''
       try {
+        const frameDataUrl = mode === 'single' ? await getFrameDataUrl() : undefined
         const payload = await detectRealtimeCurrentFrame({
           mode,
           camera_index: mode === 'single' || mode === 'hybrid' ? singleCameraIndex.value : undefined,
@@ -501,7 +502,7 @@ export default defineComponent({
           detect_classification: detectClassification.value,
           detect_ripeness: detectClassification.value ? detectRipeness.value : false,
           detect_diameter: detectDiameter.value,
-          frame_data_url: mode === 'single' ? previewFrameDataUrl.value || undefined : undefined
+          frame_data_url: frameDataUrl || undefined
         })
         currentTargets.value = payload.targets || []
         lastDetectionPayload.value = payload
