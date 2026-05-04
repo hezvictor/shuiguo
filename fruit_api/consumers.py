@@ -18,7 +18,7 @@ from fruit_api.services.camera import (
     get_stereo_preview_manager,
 )
 from fruit_api.services.camera.device_preview_service import DevicePreviewSession
-from fruit_api.services.detection.detect_service import classify_fruit_crop, classify_ripeness_for_fruit_crop
+from fruit_api.services.detection.detect_service import build_detection_target, yolo_targets
 
 
 def _get_camera_service():
@@ -61,46 +61,33 @@ class FruitRecognitionConsumer(AsyncWebsocketConsumer):
 
             app_config = apps.get_app_config("fruit_api")
             app_config.ensure_models_loaded()
-            yolo_model = app_config.yolo_model
-
-            results = yolo_model.predict(source=img, conf=0.25, save=False)
-            result = results[0]
-            boxes = result.boxes
-
             predictions = []
-            if boxes is not None and len(boxes) > 0:
-                for box in boxes:
-                    x1, y1, x2, y2 = map(int, box.xyxy[0].tolist())
-                    conf = box.conf[0].item()
-                    cls = int(box.cls[0].item())
-                    label = result.names[cls]
-
-                    cropped = img.crop((x1, y1, x2, y2))
-                    fruit_result = classify_fruit_crop(cropped, app_config)
-                    fruit_class = fruit_result["predicted_class"]
-                    fruit_confidence = fruit_result["confidence"]
-                    ripeness_result = classify_ripeness_for_fruit_crop(cropped, fruit_class, app_config)
-                    ripeness = (
-                        {
-                            "class": ripeness_result["predicted_class"],
-                            "predicted_class": ripeness_result["predicted_class"],
-                            "confidence": ripeness_result["confidence"],
-                            "probabilities": ripeness_result.get("probabilities"),
-                        }
-                        if ripeness_result
-                        else None
-                    )
-
-                    predictions.append(
-                        {
-                            "bbox": [x1, y1, x2, y2],
-                            "label": label,
-                            "confidence": conf,
-                            "fruit_class": fruit_class,
-                            "fruit_confidence": fruit_confidence,
-                            "ripeness": ripeness,
-                        }
-                    )
+            for detection in yolo_targets(img, app_config):
+                target = build_detection_target(
+                    img,
+                    detection,
+                    app_config,
+                    detect_ripeness=True,
+                    source_mode="single",
+                )
+                ripeness = target.get("ripeness")
+                if ripeness:
+                    ripeness = {
+                        "class": ripeness["predicted_class"],
+                        "predicted_class": ripeness["predicted_class"],
+                        "confidence": ripeness["confidence"],
+                    }
+                predictions.append(
+                    {
+                        "bbox": target["bbox"],
+                        "label": target.get("label"),
+                        "confidence": target.get("confidence"),
+                        "fruit_class": target.get("fruit_class"),
+                        "fruit_confidence": target.get("fruit_confidence"),
+                        "classification": target.get("classification"),
+                        "ripeness": ripeness,
+                    }
+                )
 
             await self.send(
                 text_data=json.dumps(

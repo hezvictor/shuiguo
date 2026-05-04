@@ -146,27 +146,11 @@ MEDIA_ROOT = BASE_DIR / "media"
 # Model files and inference configuration
 MODEL_CONFIG = {
     "BASE_DIR": BASE_DIR / "model",
-    "FRUIT_MODEL": "best_model_finetuned.pth",
     "MANGO_MODEL": "Mango_50_ultimate_model.pth",
     "BANANA_MODEL": "Banana_50_ultimate_model.pth",
     "STRAWBERRY_MODEL": "strawberry_ultimate_model.pth",
     "YOLO_MODEL": "epoch90.pt",
-    "FRUIT_CLASS_NAMES": [
-        "apple", "apricot", "banana", "beetroot", "blackberry", "blueberry", "broccoli", "cabbage",
-        "capsicum", "carrot", "cauliflower", "chili", "corn", "cucumber", "dates", "dragonfruit",
-        "eggplant", "fig", "garlic", "ginger", "grape", "guava", "jalapeno", "kiwi",
-        "lemon", "lettuce", "mango", "mushroom", "onion", "orange", "papaya", "pea",
-        "pear", "pineapple", "pomegranate", "potato", "pumpkin", "radish", "raspberry", "soybean",
-        "spinach", "strawberry", "sweetcorn", "sweetpotato", "tomato", "turnip", "watermelon", "zucchini",
-        "plum", "coconut",
-    ],
     "PREPROCESS": {
-        "FRUIT": {
-            "RESIZE": 256,
-            "CROP": 224,
-            "MEAN": [0.485, 0.456, 0.406],
-            "STD": [0.229, 0.224, 0.225],
-        },
         "RIPENESS": {
             "RESIZE": (256, 256),
             "MEAN": [0.485, 0.456, 0.406],

@@ -5,7 +5,6 @@ import io
 import os
 import time
 import uuid
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -17,7 +16,7 @@ from django.conf import settings
 from fruit_api.diameter_service import SimpleImageWrapper
 from fruit_api.services.camera import capture_dual_camera_frames, capture_single_camera_frame, get_cached_preview_frame_snapshot
 from fruit_api.services.camera.registry_service import get_camera_registry_service
-from fruit_api.services.detection.detect_service import classify_fruit_crop, classify_ripeness_for_fruit_crop, yolo_targets
+from fruit_api.services.detection.detect_service import build_detection_target, summarize_targets, yolo_targets
 from fruit_api.services.detection.diameter_app_service import get_diameter_service
 
 
@@ -157,39 +156,19 @@ def _render_annotated(image: Image.Image, detections: List[Dict[str, Any]]) -> I
 
 
 def _classify_right_image_targets(image: Image.Image, *, app_config, detect_ripeness: bool, source_mode: str) -> tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Dict[str, int]]]:
-    fruit_counts = defaultdict(int)
-    ripeness_counts = defaultdict(lambda: defaultdict(int))
     targets = []
     for detection in yolo_targets(image, app_config):
-        x1, y1, x2, y2 = detection["bbox"]
-        crop = image.crop((x1, y1, x2, y2))
-        classification = classify_fruit_crop(crop, app_config)
-        ripeness = classify_ripeness_for_fruit_crop(crop, classification["predicted_class"], app_config) if detect_ripeness else None
         targets.append(
-            {
-                "bbox": detection["bbox"],
-                "label": detection.get("label"),
-                "confidence": detection.get("confidence"),
-                "fruit_class": classification["predicted_class"],
-                "fruit_confidence": classification["confidence"],
-                "classification": {
-                    "class": classification["predicted_class"],
-                    "confidence": classification["confidence"],
-                },
-                "ripeness": {
-                    "class": ripeness["predicted_class"],
-                    "predicted_class": ripeness["predicted_class"],
-                    "confidence": ripeness["confidence"],
-                }
-                if ripeness
-                else None,
-                "source_mode": source_mode,
-            }
+            build_detection_target(
+                image,
+                detection,
+                app_config,
+                detect_ripeness=detect_ripeness,
+                source_mode=source_mode,
+            )
         )
-        fruit_counts[classification["predicted_class"]] += 1
-        if ripeness:
-            ripeness_counts[classification["predicted_class"]][ripeness["predicted_class"]] += 1
-    return targets, dict(fruit_counts), {key: dict(value) for key, value in ripeness_counts.items()}
+    counts = summarize_targets(targets)
+    return targets, counts["fruit_counts"], counts["ripeness_counts"]
 
 
 def _suggested_interval_ms(mode: str) -> int:

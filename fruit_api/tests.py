@@ -563,12 +563,9 @@ class ImageDetectionTaskApiTests(APITestCase):
             with override_settings(MEDIA_ROOT=media_root):
                 with patch(
                     'fruit_api.services.detection.image_batch_service.yolo_targets',
-                    return_value=[{'bbox': [1, 1, 12, 12], 'label': 'fruit', 'confidence': 0.91}],
+                    return_value=[{'bbox': [1, 1, 12, 12], 'label': 'Banana', 'confidence': 0.91}],
                 ), patch(
-                    'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
-                    return_value={'predicted_class': 'banana', 'confidence': 0.87},
-                ), patch(
-                    'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
+                    'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
                     return_value={'predicted_class': '过熟', 'confidence': 0.74},
                 ):
                     history = create_image_detection_task(
@@ -631,12 +628,9 @@ class ImageDetectionTaskApiTests(APITestCase):
             with override_settings(MEDIA_ROOT=media_root):
                 with patch(
                     'fruit_api.services.detection.image_batch_service.yolo_targets',
-                    return_value=[{'bbox': [1, 1, 12, 12], 'label': 'fruit', 'confidence': 0.91}],
+                    return_value=[{'bbox': [1, 1, 12, 12], 'label': 'Banana', 'confidence': 0.91}],
                 ), patch(
-                    'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
-                    return_value={'predicted_class': 'banana', 'confidence': 0.87},
-                ), patch(
-                    'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
+                    'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
                     return_value={'predicted_class': '全熟', 'confidence': 0.74},
                 ), patch(
                     'fruit_api.services.detection.image_batch_service.get_diameter_service',
@@ -940,21 +934,18 @@ class RealtimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(history.detail_data['items'][0]['annotated_image'], 'realtime/last.jpg')
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['classification']['class'], 'apple')
 
-    @patch('fruit_api.services.detection.image_batch_service.classify_fruit_crop')
     @patch('fruit_api.services.detection.image_batch_service.yolo_targets')
     def test_save_realtime_report_from_session_generates_excel_history_and_cleans_session(
         self,
         mock_yolo_targets,
-        mock_classify_fruit_crop,
     ):
         media_root = os.path.join(settings.BASE_DIR, 'test_media', 'realtime_report_from_session')
         shutil.rmtree(media_root, ignore_errors=True)
         os.makedirs(media_root, exist_ok=True)
         try:
             mock_yolo_targets.return_value = [
-                {'bbox': [1, 1, 6, 6], 'label': 'fruit', 'confidence': 0.91},
+                {'bbox': [1, 1, 6, 6], 'label': 'Banana', 'confidence': 0.91},
             ]
-            mock_classify_fruit_crop.return_value = {'predicted_class': 'apple', 'confidence': 0.88}
 
             from fruit_api.services.detection.realtime_session_service import get_realtime_session_service
 
@@ -1947,13 +1938,10 @@ class ServiceUnitTests(SimpleTestCase):
         try:
             with override_settings(MEDIA_ROOT=media_root), patch(
                 'fruit_api.services.detection.image_batch_service.yolo_targets',
-                return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
+                return_value=[{'bbox': [8, 10, 34, 34], 'label': 'Banana', 'confidence': 0.91}],
             ), patch(
-                'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
-                return_value={'predicted_class': 'banana', 'confidence': 0.87},
-            ), patch(
-                'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
-                return_value={'predicted_class': '生', 'confidence': 0.74},
+                'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
+                    return_value={'predicted_class': '生', 'confidence': 0.74},
             ), patch(
                 'fruit_api.services.detection.image_batch_service.get_diameter_service',
                 return_value=measure_service,
@@ -2088,12 +2076,9 @@ class ServiceUnitTests(SimpleTestCase):
                 return_value=measure_service,
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.yolo_targets',
-                return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
+                return_value=[{'bbox': [8, 10, 34, 34], 'label': 'Banana', 'confidence': 0.91}],
             ), patch(
-                'fruit_api.services.detection.realtime_pipeline_service.classify_fruit_crop',
-                return_value={'predicted_class': 'banana', 'confidence': 0.87},
-            ), patch(
-                'fruit_api.services.detection.realtime_pipeline_service.classify_ripeness_for_fruit_crop',
+                'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
                 return_value={'predicted_class': '全熟', 'confidence': 0.74},
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.get_camera_registry_service'

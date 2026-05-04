@@ -3,7 +3,6 @@ from __future__ import annotations
 import io
 import json
 import uuid
-from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -16,8 +15,8 @@ from django.conf import settings
 from fruit_api.diameter_service import SimpleImageWrapper
 from fruit_api.models import DetectionHistory
 from fruit_api.services.detection.detect_service import (
-    classify_fruit_crop,
-    classify_ripeness_for_fruit_crop,
+    build_detection_target,
+    summarize_targets,
     yolo_targets,
 )
 from fruit_api.services.detection.diameter_app_service import get_diameter_service
@@ -124,28 +123,6 @@ def _render_annotated_image(image: Image.Image, detections: List[Dict[str, Any]]
     return annotated
 
 
-def _normalize_classification_target(*, bbox, classification, ripeness=None, yolo_label=None, yolo_confidence=None, diameter=None, source_mode="single"):
-    return {
-        "bbox": [int(v) for v in bbox],
-        "label": yolo_label,
-        "confidence": yolo_confidence,
-        "classification": {
-            "class": classification.get("predicted_class"),
-            "confidence": classification.get("confidence"),
-        }
-        if classification
-        else None,
-        "ripeness": {
-            "predicted_class": ripeness.get("predicted_class"),
-            "confidence": ripeness.get("confidence"),
-        }
-        if ripeness
-        else None,
-        "diameter": diameter,
-        "source_mode": source_mode,
-    }
-
-
 def _measure_bbox_with_inference(*, inference_id: str, bbox: List[int]):
     measure_payload = get_diameter_service().measure_distance(
         inference_id=inference_id,
@@ -164,28 +141,18 @@ def _process_standard_image(item: Dict[str, Any], *, task_root: Path, app_config
     detections = yolo_targets(image, app_config)
 
     targets = []
-    fruit_counts = defaultdict(int)
-    ripeness_counts = defaultdict(lambda: defaultdict(int))
 
     for detection in detections:
-        x1, y1, x2, y2 = detection["bbox"]
-        crop = image.crop((x1, y1, x2, y2))
-        classification = classify_fruit_crop(crop, app_config)
-        ripeness = classify_ripeness_for_fruit_crop(crop, classification["predicted_class"], app_config) if detect_ripeness else None
         targets.append(
-            _normalize_classification_target(
-                bbox=detection["bbox"],
-                classification=classification,
-                ripeness=ripeness,
-                yolo_label=detection.get("label"),
-                yolo_confidence=detection.get("confidence"),
-                diameter=None,
+            build_detection_target(
+                image,
+                detection,
+                app_config,
+                detect_ripeness=detect_ripeness,
                 source_mode="single",
             )
         )
-        fruit_counts[classification["predicted_class"]] += 1
-        if ripeness:
-            ripeness_counts[classification["predicted_class"]][ripeness["predicted_class"]] += 1
+    counts = summarize_targets(targets)
 
     annotated_rel = _save_pil(
         output_dir / f"{Path(item['file_name']).stem}_annotated.jpg",
@@ -204,8 +171,8 @@ def _process_standard_image(item: Dict[str, Any], *, task_root: Path, app_config
             "input_source": item.get("input_source"),
             "targets": targets,
         },
-        dict(fruit_counts),
-        {key: dict(value) for key, value in ripeness_counts.items()},
+        counts["fruit_counts"],
+        counts["ripeness_counts"],
         [],
     )
 
@@ -296,16 +263,10 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
         detect_conf=0.25,
     )
 
-    fruit_counts = defaultdict(int)
-    ripeness_counts = defaultdict(lambda: defaultdict(int))
     diameters: List[float] = []
     targets = []
 
     for detection in detections:
-        x1, y1, x2, y2 = detection["bbox"]
-        crop = right_image.crop((x1, y1, x2, y2))
-        classification = classify_fruit_crop(crop, app_config)
-        ripeness = classify_ripeness_for_fruit_crop(crop, classification["predicted_class"], app_config) if detect_ripeness else None
         measured = _measure_bbox_with_inference(inference_id=inference_payload["inference_id"], bbox=detection["bbox"])
         diameter = None
         if measured is not None:
@@ -321,19 +282,16 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
                 diameters.append(float(measured["distance_mm"]))
 
         targets.append(
-            _normalize_classification_target(
-                bbox=detection["bbox"],
-                classification=classification,
-                ripeness=ripeness,
-                yolo_label=detection.get("label"),
-                yolo_confidence=detection.get("confidence"),
-                diameter=diameter,
+            build_detection_target(
+                right_image,
+                detection,
+                app_config,
+                detect_ripeness=detect_ripeness,
                 source_mode="hybrid",
+                diameter=diameter,
             )
         )
-        fruit_counts[classification["predicted_class"]] += 1
-        if ripeness:
-            ripeness_counts[classification["predicted_class"]][ripeness["predicted_class"]] += 1
+    counts = summarize_targets(targets)
 
     annotated_rel = _save_pil(
         task_root / "mixed_outputs" / f"{item['label']}_annotated.jpg",
@@ -354,8 +312,8 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
             "targets": targets,
             "statistics": _diameter_stats(diameters),
         },
-        dict(fruit_counts),
-        {key: dict(value) for key, value in ripeness_counts.items()},
+        counts["fruit_counts"],
+        counts["ripeness_counts"],
         diameters,
     )
 
