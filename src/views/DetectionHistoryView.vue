@@ -148,15 +148,15 @@
 
             <div class="detail-image-grid">
               <figure v-if="item.originalImageUrl" class="detail-figure">
-                <img :src="item.originalImageUrl" alt="original" class="detail-image" />
+                <img :src="item.originalImageUrl" alt="original" class="detail-image" @click="openImagePreview(item.originalImageUrl, '原图')" />
                 <figcaption>原图</figcaption>
               </figure>
               <figure v-if="item.rightImageUrl" class="detail-figure">
-                <img :src="item.rightImageUrl" alt="right original" class="detail-image" />
+                <img :src="item.rightImageUrl" alt="right original" class="detail-image" @click="openImagePreview(item.rightImageUrl, '右图')" />
                 <figcaption>右图</figcaption>
               </figure>
               <figure v-if="item.annotatedImageUrl" class="detail-figure">
-                <img :src="item.annotatedImageUrl" alt="annotated" class="detail-image" />
+                <img :src="item.annotatedImageUrl" alt="annotated" class="detail-image" @click="openImagePreview(item.annotatedImageUrl, '检测结果图')" />
                 <figcaption>检测结果</figcaption>
               </figure>
             </div>
@@ -187,6 +187,20 @@
         </div>
       </div>
     </el-dialog>
+
+    <el-dialog
+      v-model="imagePreviewVisible"
+      :title="previewImageTitle"
+      width="90%"
+      top="5vh"
+      append-to-body
+      destroy-on-close
+      class="image-preview-dialog"
+    >
+      <div class="image-preview-wrapper">
+        <img v-if="previewImageUrl" :src="previewImageUrl" :alt="previewImageTitle" class="image-preview-full" />
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -207,6 +221,9 @@ export default {
     const detailVisible = ref(false)
     const currentDetail = ref(null)
     const detectionType = ref('')
+    const imagePreviewVisible = ref(false)
+    const previewImageUrl = ref('')
+    const previewImageTitle = ref('')
 
     const formatDateTime = (isoString) => (isoString ? new Date(isoString).toLocaleString('zh-CN') : '-')
     const formatNumber = (value) => (value === null || value === undefined ? '-' : Number(value).toFixed(2))
@@ -295,6 +312,13 @@ export default {
     const handlePageChange = (page) => {
       currentPage.value = page
       fetchHistory()
+    }
+
+    const openImagePreview = (url, title = '图片预览') => {
+      if (!url) return
+      previewImageUrl.value = url
+      previewImageTitle.value = title
+      imagePreviewVisible.value = true
     }
 
     const sortedFruitCounts = computed(() => {
@@ -392,6 +416,9 @@ export default {
       detailVisible,
       currentDetail,
       detectionType,
+      imagePreviewVisible,
+      previewImageUrl,
+      previewImageTitle,
       formatDateTime,
       formatNumber,
       tagType,
@@ -411,6 +438,7 @@ export default {
       itemHasTargets,
       itemSummaryText,
       historySummaryText,
+      openImagePreview,
       translateFruitLabel,
       translateRipenessLabel
     }
@@ -531,6 +559,31 @@ export default {
   aspect-ratio: 4 / 3;
   object-fit: cover;
   border-radius: 12px;
+  cursor: zoom-in;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.detail-image:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 12px 24px rgba(24, 53, 43, 0.16);
+}
+
+.image-preview-wrapper {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-height: 78vh;
+  overflow: auto;
+}
+
+.image-preview-full {
+  display: block;
+  max-width: 100%;
+  max-height: 78vh;
+  width: auto;
+  height: auto;
+  border-radius: 12px;
+  object-fit: contain;
 }
 
 .detail-figure figcaption {
