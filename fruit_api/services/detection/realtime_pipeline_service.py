@@ -155,7 +155,7 @@ def _render_annotated(image: Image.Image, detections: List[Dict[str, Any]]) -> I
     return annotated
 
 
-def _classify_right_image_targets(image: Image.Image, *, app_config, detect_ripeness: bool, source_mode: str) -> tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Dict[str, int]]]:
+def _classify_detection_image_targets(image: Image.Image, *, app_config, detect_ripeness: bool, source_mode: str) -> tuple[List[Dict[str, Any]], Dict[str, int], Dict[str, Dict[str, int]]]:
     targets = []
     for detection in yolo_targets(image, app_config):
         targets.append(
@@ -235,7 +235,7 @@ def run_single_preview_frame_realtime_detection(*, app_config, frame_data_url: s
 
 def _run_single_image_realtime_detection(*, image: Image.Image, app_config, camera_index: int, detect_ripeness: bool, frame_source: str) -> Dict[str, Any]:
     detections = yolo_targets(image, app_config)
-    targets, fruit_counts, ripeness_counts = _classify_right_image_targets(
+    targets, fruit_counts, ripeness_counts = _classify_detection_image_targets(
         image,
         app_config=app_config,
         detect_ripeness=detect_ripeness,
@@ -275,7 +275,7 @@ def _run_dual_realtime_detection_from_frames(
     detect_ripeness: bool = False,
     mode: str = "dual",
 ) -> Dict[str, Any]:
-    right_image = _bgr_to_pil(right_frame)
+    left_image = _bgr_to_pil(left_frame)
 
     if not detect_classification and mode == "dual":
         payload = get_diameter_service().run_full_measurement(
@@ -344,9 +344,9 @@ def _run_dual_realtime_detection_from_frames(
         save_color=True,
         detect_conf=0.25,
     )
-    detections = yolo_targets(right_image, app_config)
-    classified_targets, fruit_counts, ripeness_counts = _classify_right_image_targets(
-        right_image,
+    detections = yolo_targets(left_image, app_config)
+    classified_targets, fruit_counts, ripeness_counts = _classify_detection_image_targets(
+        left_image,
         app_config=app_config,
         detect_ripeness=detect_ripeness,
         source_mode="hybrid",
@@ -380,7 +380,7 @@ def _run_dual_realtime_detection_from_frames(
         "min_diameter_mm": round(min(diameters), 6) if diameters else None,
         "max_diameter_mm": round(max(diameters), 6) if diameters else None,
     }
-    annotated_rel = _save_pil_image(_render_annotated(right_image, merged_targets or detections), "hybrid")
+    annotated_rel = _save_pil_image(_render_annotated(left_image, merged_targets or detections), "hybrid")
     return {
         "status": "success",
         "mode": mode,

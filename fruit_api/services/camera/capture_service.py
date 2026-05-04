@@ -68,6 +68,28 @@ class CameraCaptureService:
         return None
 
     @staticmethod
+    def _normalize_dual_camera_indices(
+        *,
+        camera_indices: List[int],
+        left_camera_index: int | None,
+        right_camera_index: int | None,
+        registry_selection: Dict[str, Any] | None,
+    ) -> List[int]:
+        provided_pair = [int(index) for index in camera_indices[:2]]
+        explicit_pair = None
+        if left_camera_index is not None and right_camera_index is not None:
+            explicit_pair = [int(left_camera_index), int(right_camera_index)]
+        elif registry_selection:
+            configured_left = registry_selection.get("dual_left_camera_index")
+            configured_right = registry_selection.get("dual_right_camera_index")
+            if configured_left is not None and configured_right is not None:
+                candidate_pair = [int(configured_left), int(configured_right)]
+                if set(candidate_pair) == set(provided_pair):
+                    explicit_pair = candidate_pair
+
+        return explicit_pair or provided_pair
+
+    @staticmethod
     def _root_dir() -> Path:
         root = Path(settings.MEDIA_ROOT) / "camera_captures"
         root.mkdir(parents=True, exist_ok=True)
@@ -214,9 +236,17 @@ class CameraCaptureService:
     def capture(self, *, user_id: int, camera_indices: List[int], capture_mode: str = "auto", persist: bool = True, left_camera_index=None, right_camera_index=None, backend: str | None = None) -> Dict[str, Any]:
         self.cleanup_expired_staged()
         registry = get_camera_registry_service().snapshot()
-        backend = backend if backend is not None else registry.get("selection", {}).get("backend") or None
+        selection = registry.get("selection", {})
+        backend = backend if backend is not None else selection.get("backend") or None
         if capture_mode == "auto":
             capture_mode = "dual" if len(camera_indices) == 2 else "single"
+        if capture_mode == "dual":
+            camera_indices = self._normalize_dual_camera_indices(
+                camera_indices=camera_indices,
+                left_camera_index=left_camera_index,
+                right_camera_index=right_camera_index,
+                registry_selection=selection,
+            )
 
         frames = self._capture_frames(camera_indices=camera_indices, capture_mode=capture_mode, backend=backend)
         if persist:

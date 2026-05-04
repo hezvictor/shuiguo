@@ -182,8 +182,8 @@ def _process_diameter_group(item: Dict[str, Any], *, task_root: Path, app_config
     left_rel = _save_bytes(input_dir / item["left_name"], item["left_content"])
     right_rel = _save_bytes(input_dir / item["right_name"], item["right_content"])
 
-    right_image = _image_from_bytes(item["right_content"])
-    detections = yolo_targets(right_image, app_config)
+    left_image = _image_from_bytes(item["left_content"])
+    detections = yolo_targets(left_image, app_config)
 
     inference_payload = get_diameter_service().run_inference(
         yolo_model=app_config.yolo_model,
@@ -224,7 +224,7 @@ def _process_diameter_group(item: Dict[str, Any], *, task_root: Path, app_config
 
     annotated_rel = _save_pil(
         task_root / "diameter_outputs" / f"{item['label']}_annotated.jpg",
-        _render_annotated_image(right_image, targets or detections),
+        _render_annotated_image(left_image, targets or detections),
         format_name="JPEG",
     )
 
@@ -252,8 +252,8 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
     left_rel = _save_bytes(input_dir / item["left_name"], item["left_content"])
     right_rel = _save_bytes(input_dir / item["right_name"], item["right_content"])
 
-    right_image = _image_from_bytes(item["right_content"])
-    detections = yolo_targets(right_image, app_config)
+    left_image = _image_from_bytes(item["left_content"])
+    detections = yolo_targets(left_image, app_config)
 
     inference_payload = get_diameter_service().run_inference(
         yolo_model=app_config.yolo_model,
@@ -283,7 +283,7 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
 
         targets.append(
             build_detection_target(
-                right_image,
+                left_image,
                 detection,
                 app_config,
                 detect_ripeness=detect_ripeness,
@@ -295,7 +295,7 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
 
     annotated_rel = _save_pil(
         task_root / "mixed_outputs" / f"{item['label']}_annotated.jpg",
-        _render_annotated_image(right_image, targets or detections),
+        _render_annotated_image(left_image, targets or detections),
         format_name="JPEG",
     )
 

@@ -1933,13 +1933,14 @@ class ServiceUnitTests(SimpleTestCase):
                 }
             ]
         }
-        image_bytes = self._image_bytes_with_size(color=(20, 30, 40))
+        left_image_bytes = self._image_bytes_with_size(color=(200, 10, 10))
+        right_image_bytes = self._image_bytes_with_size(color=(10, 200, 10))
 
         try:
             with override_settings(MEDIA_ROOT=media_root), patch(
                 'fruit_api.services.detection.image_batch_service.yolo_targets',
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'Banana', 'confidence': 0.91}],
-            ), patch(
+            ) as mock_yolo_targets, patch(
                 'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
                     return_value={'predicted_class': '生', 'confidence': 0.74},
             ), patch(
@@ -1958,8 +1959,8 @@ class ServiceUnitTests(SimpleTestCase):
                             'label': 'group1',
                             'left_name': 'group1_left.png',
                             'right_name': 'group1_right.png',
-                            'left_content': image_bytes,
-                            'right_content': image_bytes,
+                            'left_content': left_image_bytes,
+                            'right_content': right_image_bytes,
                             'input_source': 'zip_archive',
                             'archive_name': 'mixed.zip',
                             'archive_path': 'group1',
@@ -1975,11 +1976,13 @@ class ServiceUnitTests(SimpleTestCase):
                 annotated_path = os.path.join(media_root, history.detail_data['items'][0]['annotated_image'].replace('/', os.sep))
                 annotated_image = Image.open(annotated_path).convert('RGB')
                 line_pixel = annotated_image.getpixel((21, 24))
+                detection_pixel = mock_yolo_targets.call_args[0][0].getpixel((0, 0))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertEqual(detection_pixel, (200, 10, 10))
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
         self.assertEqual(history.summary['ripeness_counts'], {'banana': {'生': 1}})
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['ripeness']['predicted_class'], '生')
@@ -2002,13 +2005,14 @@ class ServiceUnitTests(SimpleTestCase):
                 }
             ]
         }
-        image_bytes = self._image_bytes_with_size(color=(20, 30, 40))
+        left_image_bytes = self._image_bytes_with_size(color=(200, 10, 10))
+        right_image_bytes = self._image_bytes_with_size(color=(10, 200, 10))
 
         try:
             with override_settings(MEDIA_ROOT=media_root), patch(
                 'fruit_api.services.detection.image_batch_service.yolo_targets',
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
-            ), patch(
+            ) as mock_yolo_targets, patch(
                 'fruit_api.services.detection.image_batch_service.get_diameter_service',
                 return_value=measure_service,
             ), patch(
@@ -2023,8 +2027,8 @@ class ServiceUnitTests(SimpleTestCase):
                             'label': 'group1',
                             'left_name': 'group1_left.png',
                             'right_name': 'group1_right.png',
-                            'left_content': image_bytes,
-                            'right_content': image_bytes,
+                            'left_content': left_image_bytes,
+                            'right_content': right_image_bytes,
                             'input_source': 'zip_archive',
                             'archive_name': 'diameter.zip',
                             'archive_path': 'group1',
@@ -2040,11 +2044,13 @@ class ServiceUnitTests(SimpleTestCase):
                 annotated_path = os.path.join(media_root, history.detail_data['items'][0]['annotated_image'].replace('/', os.sep))
                 annotated_image = Image.open(annotated_path).convert('RGB')
                 line_pixel = annotated_image.getpixel((21, 24))
+                detection_pixel = mock_yolo_targets.call_args[0][0].getpixel((0, 0))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertEqual(detection_pixel, (200, 10, 10))
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
         self.assertIsNone(history.detail_data['items'][0]['targets'][0]['classification'])
 
@@ -2068,7 +2074,8 @@ class ServiceUnitTests(SimpleTestCase):
         }
         left_frame = np.zeros((48, 48, 3), dtype=np.uint8)
         right_frame = np.zeros((48, 48, 3), dtype=np.uint8)
-        right_frame[:, :] = [40, 30, 20]
+        left_frame[:, :] = [0, 0, 255]
+        right_frame[:, :] = [0, 255, 0]
 
         try:
             with override_settings(MEDIA_ROOT=media_root), patch(
@@ -2077,7 +2084,7 @@ class ServiceUnitTests(SimpleTestCase):
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.yolo_targets',
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'Banana', 'confidence': 0.91}],
-            ), patch(
+            ) as mock_yolo_targets, patch(
                 'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
                 return_value={'predicted_class': '全熟', 'confidence': 0.74},
             ), patch(
@@ -2099,11 +2106,13 @@ class ServiceUnitTests(SimpleTestCase):
                 annotated_path = os.path.join(media_root, payload['annotated_image'].replace('/', os.sep))
                 annotated_image = Image.open(annotated_path).convert('RGB')
                 line_pixel = annotated_image.getpixel((21, 24))
+                detection_pixel = mock_yolo_targets.call_args[0][0].getpixel((0, 0))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertEqual(detection_pixel, (255, 0, 0))
         self.assertEqual(payload['targets'][0]['diameter']['distance_unit'], 'cm')
         self.assertEqual(payload['summary']['ripeness_counts'], {'banana': {'全熟': 1}})
         self.assertEqual(payload['targets'][0]['ripeness']['predicted_class'], '全熟')
@@ -2238,6 +2247,63 @@ class ServiceUnitTests(SimpleTestCase):
                 self.assertEqual(set(names), expected_names)
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
+
+    @patch('fruit_api.services.camera.capture_service.capture_dual_camera_frames')
+    @patch('fruit_api.services.camera.capture_service.get_camera_registry_service')
+    def test_camera_capture_service_dual_capture_uses_configured_left_right_order_for_names(
+        self,
+        mock_get_registry_service,
+        mock_capture_dual,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_dual_name_alignment')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_get_registry_service.return_value.snapshot.return_value = {
+                'selection': {
+                    'preview_camera_indices': [2, 1],
+                    'single_camera_index': 0,
+                    'dual_left_camera_index': 1,
+                    'dual_right_camera_index': 2,
+                    'backend': '',
+                }
+            }
+            left_frame = np.zeros((24, 24, 3), dtype=np.uint8)
+            right_frame = np.zeros((24, 24, 3), dtype=np.uint8)
+            left_frame[:, :] = [0, 0, 255]
+            right_frame[:, :] = [0, 255, 0]
+            mock_capture_dual.return_value = (left_frame, right_frame)
+
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                payload = service.capture(
+                    user_id=1,
+                    camera_indices=[2, 1],
+                    capture_mode='dual',
+                    left_camera_index=1,
+                    right_camera_index=2,
+                    persist=False,
+                )
+
+                files = payload['staged_groups'][0]['files']
+                self.assertEqual([item['role'] for item in files], ['left', 'right'])
+                self.assertTrue(files[0]['file_name'].endswith('_left.jpg'))
+                self.assertTrue(files[1]['file_name'].endswith('_right.jpg'))
+
+                left_saved = Image.open(os.path.join(media_root, files[0]['file_path'].replace('/', os.sep))).convert('RGB')
+                right_saved = Image.open(os.path.join(media_root, files[1]['file_path'].replace('/', os.sep))).convert('RGB')
+                left_pixel = left_saved.getpixel((0, 0))
+                right_pixel = right_saved.getpixel((0, 0))
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+        mock_capture_dual.assert_called_once_with(1, 2, backend=None)
+        self.assertGreater(left_pixel[0], left_pixel[1])
+        self.assertGreater(left_pixel[0], left_pixel[2])
+        self.assertGreater(right_pixel[1], right_pixel[0])
+        self.assertGreater(right_pixel[1], right_pixel[2])
 
     def test_camera_capture_service_list_staged_and_cleanup_expired_groups(self):
         media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_staged_cleanup')
