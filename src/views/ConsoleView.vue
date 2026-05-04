@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="console-page">
     <section class="hero">
       <div>
@@ -252,7 +252,7 @@ export default {
       quickActions: [
         { path: '/detection/image', label: '图片检测', desc: '上传图片并生成识别结果' },
         { path: '/detection/realtime', label: '实时检测', desc: '使用默认相机配置进行实时识别' },
-        { path: '/camera/config', label: '摄像头配置', desc: '扫描相机、配置默认设备并测试拍照' },
+        { path: '/camera/config', label: '摄像头拍照与配置', desc: '扫描摄像头、设置左右机位并进行拍照测试' },
         { path: '/history', label: '检测历史', desc: '查看详情、下载报告并删除记录' }
       ],
       typeColors: TYPE_COLORS,
@@ -845,3 +845,4 @@ export default {
   }
 }
 </style>
+

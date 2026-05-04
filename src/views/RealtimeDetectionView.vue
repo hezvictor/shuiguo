@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="realtime-page">
     <div class="page-shell">
       <section class="hero">
@@ -6,40 +6,16 @@
           <p class="eyebrow">Realtime Detection Workspace</p>
           <h1>实时检测</h1>
           <p class="hero-text">
-            实时检测会读取摄像头配置页保存的默认设备方案。左侧持续展示 WebSocket 实时画面，右侧负责切换检测任务、
-            调整检测间隔，并控制摄像头与检测会话的开始和停止。
+            实时检测会复用摄像头拍照与配置页保存的默认设备方案，按固定时间间隔从摄像头采样，并将采样结果沿用图片检测同一套批处理和
+            Excel 报告链路。双目与混合模式默认要求左侧摄像机采集黑白图、右侧摄像机采集彩图，YOLO 始终优先对右侧彩图原图执行框选。
           </p>
         </div>
 
         <div class="hero-badges">
           <span class="hero-badge">当前模式：{{ modeText }}</span>
-          <span class="hero-badge">检测间隔：{{ intervalMs }} ms</span>
-          <span class="hero-badge">运行状态：{{ isRunning ? '检测中' : '未启动' }}</span>
+          <span class="hero-badge">推荐间隔：{{ suggestedIntervalMs }} ms</span>
+          <span class="hero-badge">运行状态：{{ isRunning ? '采样中' : '未启动' }}</span>
         </div>
-      </section>
-
-      <section class="guide-strip">
-        <article class="guide-step">
-          <span class="guide-index">1</span>
-          <div>
-            <h3>选择检测任务</h3>
-            <p>可以只做种类检测、种类+熟度检测、果径检测，或混合模式同时做单摄与双摄分析。</p>
-          </div>
-        </article>
-        <article class="guide-step">
-          <span class="guide-index">2</span>
-          <div>
-            <h3>启动摄像头预览</h3>
-            <p>页面通过 WebSocket 持续刷新实时画面，不再依赖轮询抓拍图片来模拟实时预览。</p>
-          </div>
-        </article>
-        <article class="guide-step">
-          <span class="guide-index">3</span>
-          <div>
-            <h3>开始实时检测</h3>
-            <p>检测循环会按设定间隔抓取当前帧，并把本次会话的统计结果持续累加到右侧面板。</p>
-          </div>
-        </article>
       </section>
 
       <el-alert
@@ -83,8 +59,12 @@
             <div class="panel-header">
               <div>
                 <h2>最近一次检测结果</h2>
-                <p>混合模式下会同时展示单摄分类结果和双摄果径结果，并标明结果来源。</p>
+                <p>这里展示本轮最新检测的标注图和目标详情，单摄、果径、混合三种模式统一显示。</p>
               </div>
+            </div>
+
+            <div v-if="lastDetectionPayload?.annotated_image_url" class="latest-result-frame">
+              <img :src="lastDetectionPayload.annotated_image_url" alt="latest detection result" class="latest-result-image" />
             </div>
 
             <div v-if="currentTargets.length" class="result-grid">
@@ -96,7 +76,7 @@
                 <p>位置：{{ formatBbox(target.bbox) }}</p>
                 <p>
                   种类：{{ targetFruitLabel(target) }}
-                  <span v-if="targetFruitConfidence(target) !== '-'"> ({{ targetFruitConfidence(target) }})</span>
+                  <span v-if="targetFruitConfidence(target) !== '-'">({{ targetFruitConfidence(target) }})</span>
                 </p>
                 <p v-if="target.ripeness">
                   熟度：{{ targetRipenessLabel(target) }} ({{ targetRipenessConfidence(target) }})
@@ -107,7 +87,7 @@
 
             <div v-else class="result-empty">
               <h3>暂无检测结果</h3>
-              <p>启动实时检测后，最新识别结果会展示在这里。</p>
+              <p>启动实时检测后，最新识别结果会显示在这里。</p>
             </div>
           </section>
         </div>
@@ -135,7 +115,14 @@
                 <el-form-item label="检测间隔 (ms)">
                   <div class="interval-row">
                     <el-input-number v-model="intervalMs" :min="500" :step="500" />
-                    <el-button @click="applySuggestedInterval">使用建议默认值</el-button>
+                    <el-button @click="applySuggestedInterval">使用推荐默认值</el-button>
+                  </div>
+                </el-form-item>
+
+                <el-form-item label="采样组数">
+                  <div class="interval-row">
+                    <el-input-number v-model="targetGroupCount" :min="1" :max="500" :step="1" :disabled="isRunning" />
+                    <span class="task-hint">已采样 {{ capturedGroupCount }} / {{ targetGroupCount }} 组</span>
                   </div>
                 </el-form-item>
 
@@ -145,25 +132,21 @@
                     <p>默认双摄：{{ dualPairLabel }}</p>
                     <p>当前预览源：{{ activePreviewDeviceLabel }}</p>
                     <p>预览连接：{{ previewConnected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}</p>
+                    <p>当前会话：{{ sessionId || '未建立' }}</p>
                   </div>
+                  <p class="task-hint">双目/混合模式下默认使用右侧彩图做 YOLO，左侧黑白图参与果径测量。</p>
                 </el-form-item>
               </el-form>
             </div>
 
             <div class="action-row action-row--stacked">
               <el-button type="primary" :loading="scanning" @click="refreshDevices">刷新设备并同步全局</el-button>
-              <el-button @click="goToCameraConfig">前往摄像头配置页</el-button>
-              <el-button type="primary" :disabled="previewEnabled || !canStartPreview" @click="startPreview">
-                启动摄像头
-              </el-button>
-              <el-button type="warning" :disabled="!previewEnabled" @click="stopPreview">
-                停止摄像头
-              </el-button>
-              <el-button type="success" :disabled="isRunning" :loading="runningRequest" @click="startLoop">
-                开始实时检测
-              </el-button>
+              <el-button @click="goToCameraConfig">前往摄像头拍照与配置页</el-button>
+              <el-button type="primary" :disabled="previewEnabled || !canStartPreview" @click="startPreview">启动摄像头</el-button>
+              <el-button type="warning" :disabled="!previewEnabled" @click="stopPreview">停止摄像头</el-button>
+              <el-button type="success" :disabled="isRunning" :loading="runningRequest" @click="startLoop">开始实时检测</el-button>
               <el-button type="warning" :disabled="!isRunning" @click="stopLoop">停止实时检测</el-button>
-              <el-button :disabled="!sessionSummary.total_targets || saving" :loading="saving" @click="saveSessionReport">
+              <el-button :disabled="!sessionId || !capturedGroupCount || saving" :loading="saving" @click="saveSessionReport">
                 保存本次会话
               </el-button>
             </div>
@@ -183,16 +166,20 @@
                 <strong>{{ sessionSummary.total_targets }}</strong>
               </div>
               <div class="metric-box">
-                <span>采样次数</span>
+                <span>检测次数</span>
                 <strong>{{ sessionSummary.sample_count }}</strong>
               </div>
-              <div v-if="showDiameterMetrics" class="metric-box">
-                <span>有效果径数</span>
-                <strong>{{ sessionSummary.valid_measurements }}</strong>
+              <div class="metric-box">
+                <span>采样进度</span>
+                <strong>{{ capturedGroupCount }} / {{ targetGroupCount }}</strong>
               </div>
               <div v-if="showDiameterMetrics" class="metric-box">
                 <span>平均果径</span>
                 <strong>{{ diameterMetric('avg') }}</strong>
+              </div>
+              <div v-if="showDiameterMetrics" class="metric-box">
+                <span>有效果径数</span>
+                <strong>{{ sessionSummary.valid_measurements }}</strong>
               </div>
             </div>
 
@@ -244,7 +231,10 @@ function createEmptySummary() {
     fruit_counts: {},
     ripeness_counts: {},
     valid_measurements: 0,
-    diameter_values: []
+    diameter_sum_mm: 0,
+    diameter_count: 0,
+    min_diameter_mm: null,
+    max_diameter_mm: null
   }
 }
 
@@ -254,7 +244,8 @@ export default defineComponent({
     const router = useRouter()
     const { state, loadRegistry, scanRegistry } = useCameraWorkspace()
 
-    const intervalMs = ref(1500)
+    const intervalMs = ref(2000)
+    const targetGroupCount = ref(10)
     const detectClassification = ref(true)
     const detectRipeness = ref(false)
     const detectDiameter = ref(false)
@@ -264,49 +255,42 @@ export default defineComponent({
     const saving = ref(false)
     const scanning = ref(false)
     const errorMessage = ref('')
-    const currentTargets = ref([])
+    const currentResultItems = ref([])
     const lastDetectionPayload = ref(null)
     const lastDetectAt = ref(null)
     const sessionSummary = ref(createEmptySummary())
     const sessionMode = ref('')
+    const sessionId = ref('')
+    const capturedGroupCount = ref(0)
     let loopTimer = null
 
     const registry = computed(() => state.registry)
-    const singleIntervalMs = computed(() => registry.value.suggested_intervals?.single_interval_ms || 1500)
-    const dualIntervalMs = computed(() => registry.value.suggested_intervals?.dual_interval_ms || 5000)
+    const singleIntervalMs = computed(() => registry.value.suggested_intervals?.single_interval_ms || 2000)
+    const dualIntervalMs = computed(() => registry.value.suggested_intervals?.dual_interval_ms || 6000)
+
     const effectiveMode = computed(() => {
-      if (detectDiameter.value && detectClassification.value) {
-        return 'hybrid'
-      }
-      if (detectDiameter.value) {
-        return 'dual'
-      }
-      if (detectClassification.value) {
-        return 'single'
-      }
+      if (detectDiameter.value && detectClassification.value) return 'hybrid'
+      if (detectDiameter.value) return 'dual'
+      if (detectClassification.value) return 'single'
       return ''
     })
+
     const previewMode = computed(() => (detectDiameter.value ? 'dual' : 'single'))
     const modeText = computed(() => {
-      if (effectiveMode.value === 'single') {
-        return detectRipeness.value ? '单摄种类 + 熟度检测' : '单摄种类检测'
-      }
-      if (effectiveMode.value === 'dual') {
-        return '双摄果径检测'
-      }
-      if (effectiveMode.value === 'hybrid') {
-        return detectRipeness.value ? '混合模式（种类 + 熟度 + 果径）' : '混合模式（种类 + 果径）'
-      }
+      if (effectiveMode.value === 'single') return detectRipeness.value ? '单摄种类 + 熟度检测' : '单摄种类检测'
+      if (effectiveMode.value === 'dual') return '双摄果径检测'
+      if (effectiveMode.value === 'hybrid') return detectRipeness.value ? '混合模式（种类 + 熟度 + 果径）' : '混合模式（种类 + 果径）'
       return '未选择检测任务'
     })
     const previewDescription = computed(() =>
       previewMode.value === 'dual'
-        ? '当前预览使用默认双摄设备，便于在果径检测或混合模式下直接观察左右相机画面。'
+        ? '当前预览使用默认双摄设备，适用于果径检测和混合模式。'
         : '当前预览使用默认单摄设备，适用于水果种类和熟度实时检测。'
     )
     const showDiameterMetrics = computed(
-      () => detectDiameter.value || sessionSummary.value.valid_measurements > 0 || sessionSummary.value.diameter_values.length > 0
+      () => detectDiameter.value || sessionSummary.value.valid_measurements > 0 || sessionSummary.value.diameter_count > 0
     )
+
     const singleCameraIndex = computed(() => registry.value.selection?.single_camera_index ?? 0)
     const dualLeftCameraIndex = computed(() => registry.value.selection?.dual_left_camera_index ?? 0)
     const dualRightCameraIndex = computed(() => registry.value.selection?.dual_right_camera_index ?? 1)
@@ -317,15 +301,11 @@ export default defineComponent({
     }
 
     const singleCameraLabel = computed(() => resolveCameraLabel(singleCameraIndex.value))
-    const dualPairLabel = computed(() => {
-      const leftLabel = resolveCameraLabel(dualLeftCameraIndex.value)
-      const rightLabel = resolveCameraLabel(dualRightCameraIndex.value)
-      return `${leftLabel} / ${rightLabel}`
-    })
-    const activePreviewDeviceLabel = computed(() =>
-      previewMode.value === 'dual' ? dualPairLabel.value : singleCameraLabel.value
-    )
+    const dualPairLabel = computed(() => `${resolveCameraLabel(dualLeftCameraIndex.value)} / ${resolveCameraLabel(dualRightCameraIndex.value)}`)
+    const activePreviewDeviceLabel = computed(() => (previewMode.value === 'dual' ? dualPairLabel.value : singleCameraLabel.value))
     const lastDetectTime = computed(() => (lastDetectAt.value ? new Date(lastDetectAt.value).toLocaleString('zh-CN') : '暂无'))
+
+    const currentTargets = computed(() => currentResultItems.value.flatMap((item) => item.targets || []))
     const fruitStats = computed(() =>
       Object.entries(sessionSummary.value.fruit_counts || {})
         .map(([fruit, count]) => ({ fruit, count }))
@@ -342,12 +322,8 @@ export default defineComponent({
     })
 
     const suggestedIntervalMs = computed(() => {
-      if (effectiveMode.value === 'dual') {
-        return dualIntervalMs.value
-      }
-      if (effectiveMode.value === 'hybrid') {
-        return Math.max(singleIntervalMs.value, dualIntervalMs.value)
-      }
+      if (effectiveMode.value === 'dual') return dualIntervalMs.value
+      if (effectiveMode.value === 'hybrid') return Math.max(singleIntervalMs.value, dualIntervalMs.value)
       return singleIntervalMs.value
     })
 
@@ -370,19 +346,15 @@ export default defineComponent({
     })
 
     const canStartPreview = computed(() => {
-      if (previewMode.value === 'dual') {
-        return dualLeftCameraIndex.value !== dualRightCameraIndex.value
-      }
+      if (previewMode.value === 'dual') return dualLeftCameraIndex.value !== dualRightCameraIndex.value
       return true
     })
-
     const previewActive = computed(() => previewEnabled.value && canStartPreview.value)
 
     const {
       connected: previewConnected,
       errorMessage: previewErrorMessage,
-      imageUrl: previewImageUrl,
-      getFrameDataUrl
+      imageUrl: previewImageUrl
     } = useCameraPreviewSocket({
       active: previewActive,
       payload: previewPayload
@@ -475,10 +447,19 @@ export default defineComponent({
 
       sessionSummary.value.valid_measurements += summary.valid_measurements || 0
       ;(payload.targets || []).forEach((target) => {
-        const distance = target.diameter?.distance_mm
-        if (distance !== null && distance !== undefined) {
-          sessionSummary.value.diameter_values.push(Number(distance))
-        }
+        const distance = target?.diameter?.distance_mm
+        if (distance === null || distance === undefined) return
+        const numericDistance = Number(distance)
+        sessionSummary.value.diameter_sum_mm += numericDistance
+        sessionSummary.value.diameter_count += 1
+        sessionSummary.value.min_diameter_mm =
+          sessionSummary.value.min_diameter_mm === null
+            ? numericDistance
+            : Math.min(sessionSummary.value.min_diameter_mm, numericDistance)
+        sessionSummary.value.max_diameter_mm =
+          sessionSummary.value.max_diameter_mm === null
+            ? numericDistance
+            : Math.max(sessionSummary.value.max_diameter_mm, numericDistance)
       })
     }
 
@@ -492,7 +473,6 @@ export default defineComponent({
       runningRequest.value = true
       errorMessage.value = ''
       try {
-        const frameDataUrl = mode === 'single' ? await getFrameDataUrl() : undefined
         const payload = await detectRealtimeCurrentFrame({
           mode,
           camera_index: mode === 'single' || mode === 'hybrid' ? singleCameraIndex.value : undefined,
@@ -502,11 +482,16 @@ export default defineComponent({
           detect_classification: detectClassification.value,
           detect_ripeness: detectClassification.value ? detectRipeness.value : false,
           detect_diameter: detectDiameter.value,
-          frame_data_url: frameDataUrl || undefined
+          session_id: sessionId.value || undefined,
+          collect_sample: true,
+          target_group_count: targetGroupCount.value,
+          interval_ms: intervalMs.value
         })
-        currentTargets.value = payload.targets || []
+        currentResultItems.value = payload.items || []
         lastDetectionPayload.value = payload
         lastDetectAt.value = Date.now()
+        sessionId.value = payload.session_id || sessionId.value
+        capturedGroupCount.value = payload.captured_group_count || capturedGroupCount.value
         updateSessionSummary(payload)
         return true
       } catch (error) {
@@ -522,6 +507,11 @@ export default defineComponent({
       loopTimer = window.setTimeout(async () => {
         if (!isRunning.value) return
         await runDetectionOnce()
+        if (capturedGroupCount.value >= targetGroupCount.value) {
+          stopLoop(false)
+          ElMessage.success(`已完成 ${capturedGroupCount.value} 组实时采样`)
+          return
+        }
         scheduleNext()
       }, intervalMs.value)
     }
@@ -542,8 +532,10 @@ export default defineComponent({
 
       sessionMode.value = effectiveMode.value
       sessionSummary.value = createEmptySummary()
-      currentTargets.value = []
+      currentResultItems.value = []
       lastDetectionPayload.value = null
+      sessionId.value = ''
+      capturedGroupCount.value = 0
       isRunning.value = true
 
       const ok = await runDetectionOnce()
@@ -553,20 +545,25 @@ export default defineComponent({
         return
       }
 
+      if (capturedGroupCount.value >= targetGroupCount.value) {
+        stopLoop(false)
+        ElMessage.success(`已完成 ${capturedGroupCount.value} 组实时采样`)
+        return
+      }
+
       scheduleNext()
       ElMessage.success('实时检测已启动')
     }
 
     const diameterMetric = (type) => {
-      const values = sessionSummary.value.diameter_values || []
-      if (!values.length) return '-'
+      if (!sessionSummary.value.diameter_count) return '-'
       if (type === 'avg') {
-        return `${(values.reduce((sum, value) => sum + value, 0) / values.length).toFixed(2)} mm`
+        return `${(sessionSummary.value.diameter_sum_mm / sessionSummary.value.diameter_count).toFixed(2)} mm`
       }
       if (type === 'min') {
-        return `${Math.min(...values).toFixed(2)} mm`
+        return `${Number(sessionSummary.value.min_diameter_mm).toFixed(2)} mm`
       }
-      return `${Math.max(...values).toFixed(2)} mm`
+      return `${Number(sessionSummary.value.max_diameter_mm).toFixed(2)} mm`
     }
 
     const saveSessionReport = async () => {
@@ -575,53 +572,25 @@ export default defineComponent({
         errorMessage.value = '当前没有可保存的检测模式'
         return
       }
+      if (!sessionId.value) {
+        errorMessage.value = '当前实时会话没有可保存的采样数据'
+        return
+      }
 
       saving.value = true
       try {
-        const includeDiameterStats =
-          sessionSummary.value.valid_measurements > 0 || sessionSummary.value.diameter_values.length > 0
         await saveRealtimeReport({
+          session_id: sessionId.value,
           mode,
           interval_ms: intervalMs.value,
-          sample_count: sessionSummary.value.sample_count,
-          total_targets: sessionSummary.value.total_targets,
-          fruit_counts: sessionSummary.value.fruit_counts,
-          ripeness_counts: sessionSummary.value.ripeness_counts,
-          valid_measurements: sessionSummary.value.valid_measurements,
-          statistics: includeDiameterStats
-            ? {
-                avg_diameter_mm: sessionSummary.value.diameter_values.length
-                  ? Number(
-                      (
-                        sessionSummary.value.diameter_values.reduce((sum, value) => sum + value, 0) /
-                        sessionSummary.value.diameter_values.length
-                      ).toFixed(6)
-                    )
-                  : null,
-                min_diameter_mm: sessionSummary.value.diameter_values.length
-                  ? Number(Math.min(...sessionSummary.value.diameter_values).toFixed(6))
-                  : null,
-                max_diameter_mm: sessionSummary.value.diameter_values.length
-                  ? Number(Math.max(...sessionSummary.value.diameter_values).toFixed(6))
-                  : null
-              }
-            : {},
           camera_profile: {
             single_camera_index: singleCameraIndex.value,
             dual_left_camera_index: dualLeftCameraIndex.value,
             dual_right_camera_index: dualRightCameraIndex.value
-          },
-          last_capture: lastDetectionPayload.value
-            ? {
-                annotated_image: lastDetectionPayload.value.annotated_image,
-                single_annotated_image: lastDetectionPayload.value.single_annotated_image,
-                dual_annotated_image: lastDetectionPayload.value.dual_annotated_image,
-                targets: lastDetectionPayload.value.targets || [],
-                single_targets: lastDetectionPayload.value.single_targets || [],
-                dual_targets: lastDetectionPayload.value.dual_targets || []
-              }
-            : null
+          }
         })
+        sessionId.value = ''
+        capturedGroupCount.value = 0
         ElMessage.success('本次实时检测会话已保存到历史记录')
       } catch (error) {
         errorMessage.value = error?.response?.data?.error || error.message || '保存会话失败'
@@ -635,43 +604,26 @@ export default defineComponent({
     }
 
     const targetSourceLabel = (target) => {
-      if (target?.source_mode === 'dual') {
-        return '双摄'
-      }
-      if (target?.source_mode === 'single') {
-        return '单摄'
-      }
+      if (target?.source_mode === 'dual') return '双摄'
+      if (target?.source_mode === 'single') return '单摄'
+      if (target?.source_mode === 'hybrid') return '混合'
       return '检测目标'
     }
 
-    const targetFruitLabel = (target) => {
-      if (target?.source_mode === 'dual') {
-        return translateFruitLabel(target?.classification?.class || target?.label || '未识别')
-      }
-      return translateFruitLabel(target?.fruit_class || target?.label || '未识别')
-    }
-
+    const targetFruitLabel = (target) => translateFruitLabel(target?.classification?.class || target?.fruit_class || target?.label || '未识别')
     const targetFruitConfidence = (target) => {
-      const confidence =
-        target?.source_mode === 'dual' ? target?.classification?.confidence ?? target?.confidence : target?.fruit_confidence
-      if (confidence === null || confidence === undefined) {
-        return '-'
-      }
+      const confidence = target?.classification?.confidence ?? target?.fruit_confidence ?? target?.confidence
+      if (confidence === null || confidence === undefined) return '-'
       return `${(Number(confidence) * 100).toFixed(1)}%`
     }
-
-    const targetRipenessLabel = (target) => translateRipenessLabel(target?.ripeness?.class)
+    const targetRipenessLabel = (target) => translateRipenessLabel(target?.ripeness?.predicted_class || target?.ripeness?.class)
     const targetRipenessConfidence = (target) => {
-      if (target?.ripeness?.confidence === null || target?.ripeness?.confidence === undefined) {
-        return '-'
-      }
+      if (target?.ripeness?.confidence === null || target?.ripeness?.confidence === undefined) return '-'
       return `${(Number(target.ripeness.confidence) * 100).toFixed(1)}%`
     }
     const targetHasDiameter = (target) => target?.diameter?.distance_mm !== null && target?.diameter?.distance_mm !== undefined
     const targetDiameterText = (target) => {
-      if (targetHasDiameter(target)) {
-        return `${Number(target.diameter.distance_mm).toFixed(2)} mm`
-      }
+      if (targetHasDiameter(target)) return `${Number(target.diameter.distance_mm).toFixed(2)} mm`
       return target?.diameter?.status || '-'
     }
     const targetTitle = (target) => `${targetSourceLabel(target)} · ${targetFruitLabel(target)}`
@@ -724,6 +676,8 @@ export default defineComponent({
       activePreviewDeviceLabel,
       applySuggestedInterval,
       canStartPreview,
+      capturedGroupCount,
+      currentResultItems,
       currentTargets,
       detectClassification,
       detectDiameter,
@@ -737,6 +691,7 @@ export default defineComponent({
       intervalMs,
       isRunning,
       lastDetectTime,
+      lastDetectionPayload,
       modeText,
       previewConnected,
       previewDescription,
@@ -749,6 +704,7 @@ export default defineComponent({
       saveSessionReport,
       saving,
       scanning,
+      sessionId,
       sessionSummary,
       showDiameterMetrics,
       singleCameraLabel,
@@ -757,9 +713,11 @@ export default defineComponent({
       statWidth,
       stopLoop,
       stopPreview,
+      suggestedIntervalMs,
       targetDiameterText,
       targetFruitConfidence,
       targetFruitLabel,
+      targetGroupCount,
       targetHasDiameter,
       targetRipenessConfidence,
       targetRipenessLabel,
@@ -835,47 +793,6 @@ export default defineComponent({
   background: rgba(255, 255, 255, 0.12);
 }
 
-.guide-strip {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 16px;
-}
-
-.guide-step {
-  display: flex;
-  gap: 14px;
-  padding: 18px 20px;
-  border-radius: 22px;
-  background: rgba(255, 255, 255, 0.92);
-  box-shadow: 0 14px 34px rgba(29, 54, 44, 0.06);
-}
-
-.guide-index {
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: #173b32;
-  color: #f6fbf8;
-  font-weight: 700;
-}
-
-.guide-step h3,
-.panel-header h2 {
-  margin: 0 0 6px;
-  color: #173b32;
-}
-
-.guide-step p,
-.panel-header p {
-  margin: 0;
-  color: #587166;
-  line-height: 1.7;
-}
-
 .workspace-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.7fr) 380px;
@@ -904,6 +821,17 @@ export default defineComponent({
   justify-content: space-between;
   gap: 12px;
   margin-bottom: 16px;
+}
+
+.panel-header h2 {
+  margin: 0 0 6px;
+  color: #173b32;
+}
+
+.panel-header p {
+  margin: 0;
+  color: #587166;
+  line-height: 1.7;
 }
 
 .panel-badge {
@@ -976,6 +904,21 @@ export default defineComponent({
 .preview-error {
   margin: 12px 0 0;
   color: #b42318;
+}
+
+.latest-result-frame {
+  margin-bottom: 16px;
+  border-radius: 18px;
+  overflow: hidden;
+  background: #f6faf7;
+}
+
+.latest-result-image {
+  display: block;
+  width: 100%;
+  max-height: 420px;
+  object-fit: contain;
+  background: #111827;
 }
 
 .result-grid {
@@ -1102,8 +1045,7 @@ export default defineComponent({
 }
 
 @media (max-width: 980px) {
-  .hero,
-  .guide-strip {
+  .hero {
     grid-template-columns: 1fr;
   }
 }
@@ -1127,3 +1069,4 @@ export default defineComponent({
   }
 }
 </style>
+

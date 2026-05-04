@@ -1,13 +1,13 @@
-<template>
+﻿<template>
   <div class="camera-config-page">
     <div class="page-shell">
       <section class="hero">
         <div>
           <p class="eyebrow">Camera Configuration Workspace</p>
-          <h1>摄像头配置</h1>
+          <h1>摄像头拍照与配置</h1>
           <p class="hero-text">
-            先扫描当前设备并同步全局摄像头方案，再选择单摄、双摄和预览设备。预览区域通过 WebSocket
-            直接展示实时画面，拍照改为先暂存分组，点击保存后再生成 ZIP 结果。
+            先扫描并同步当前摄像头方案，再设置单摄、双摄和预览设备。拍照会先进入待保存照片组，保存后再生成 ZIP；
+            双目场景请固定为左图摄像机采集黑白图，右图摄像机采集彩图，混合检测和实时混合检测都会默认对右侧彩图执行 YOLO 框选。
           </p>
         </div>
 
@@ -124,6 +124,12 @@
                   </el-select>
                 </el-form-item>
               </el-form>
+
+              <div class="camera-role-note">
+                <strong>双目相机角色说明</strong>
+                <p>左图摄像机：采集黑白图，用于果径测量配对。</p>
+                <p>右图摄像机：采集彩图，图片检测混合输入和实时混合检测默认对这一路原图执行 YOLO 框选。</p>
+              </div>
             </div>
           </section>
 
@@ -813,6 +819,23 @@ export default defineComponent({
   gap: 16px;
 }
 
+.camera-role-note {
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #f4faf6;
+  border: 1px solid rgba(35, 80, 66, 0.12);
+}
+
+.camera-role-note strong {
+  color: #173b32;
+}
+
+.camera-role-note p {
+  margin: 8px 0 0;
+  color: #587166;
+  line-height: 1.7;
+}
+
 .preview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
@@ -950,3 +973,4 @@ export default defineComponent({
   }
 }
 </style>
+

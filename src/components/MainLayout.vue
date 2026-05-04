@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="main-layout">
     <header class="top-navbar">
       <div class="navbar-container">
@@ -89,11 +89,11 @@
 
           <el-menu-item index="/camera/config">
             <el-icon><DataAnalysis /></el-icon>
-            <span>摄像头配置</span>
+            <span>摄像头拍照与配置</span>
           </el-menu-item>
         </el-sub-menu>
 
-        <el-menu-item index="/history">
+          <el-menu-item index="/history">
           <el-icon><Timer /></el-icon>
           <span>检测历史</span>
         </el-menu-item>
@@ -471,3 +471,4 @@ export default defineComponent({
   }
 }
 </style>
+
