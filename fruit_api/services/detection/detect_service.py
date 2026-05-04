@@ -25,6 +25,9 @@ class InvalidParamError(DetectServiceError):
     pass
 
 
+SUPPORTED_RIPENESS_TYPES = ("mango", "banana", "strawberry")
+
+
 def load_rgb_image(image_file) -> Image.Image:
     try:
         return Image.open(image_file).convert('RGB')
@@ -76,33 +79,15 @@ def classify_with_ripeness(img: Image.Image, app_config) -> Dict:
 
 
 def classify_ripeness_by_type(img: Image.Image, fruit_type: str, app_config) -> Dict:
-    type_map = {
-        'mango': (app_config.mango_model, app_config.mango_classes),
-        'banana': (app_config.banana_model, app_config.banana_classes),
-        'strawberry': (app_config.strawberry_model, app_config.strawberry_classes),
-    }
-    if fruit_type not in type_map:
-        raise InvalidParamError('不支持的水果类型，仅支持 mango/banana/strawberry')
-
-    model, classes = type_map[fruit_type]
-
-    img_t = app_config.ripeness_preprocess(img)
-    batch_t = torch.unsqueeze(img_t, 0).to(app_config.device)
-    with torch.no_grad():
-        output = model(batch_t)
-    probs = F.softmax(output, dim=1)[0]
-    conf, idx = torch.max(probs, 0)
-
-    prob_dict = {name: probs[i].item() for i, name in enumerate(classes)}
+    normalized_type = (fruit_type or '').strip().lower()
+    model, classes = app_config.get_ripeness_info(normalized_type)
+    if model is None:
+        raise InvalidParamError(f"不支持的水果类型，仅支持 {'/'.join(SUPPORTED_RIPENESS_TYPES)}")
 
     return {
         'status': 'success',
-        'fruit_type': fruit_type,
-        'ripeness_result': {
-            'predicted_class': classes[idx],
-            'confidence': conf.item(),
-            'probabilities': prob_dict,
-        },
+        'fruit_type': normalized_type,
+        'ripeness_result': _predict_ripeness(img, model, classes, app_config),
     }
 
 
@@ -111,14 +96,19 @@ def classify_ripeness_for_fruit_crop(img: Image.Image, fruit_label: str, app_con
     if model is None:
         return None
 
+    return _predict_ripeness(img, model, classes, app_config)
+
+
+def _predict_ripeness(img: Image.Image, model, classes: List[str], app_config) -> Dict:
     img_t_ripe = app_config.ripeness_preprocess(img)
     batch_t_ripe = torch.unsqueeze(img_t_ripe, 0).to(app_config.device)
     with torch.no_grad():
         ripe_output = model(batch_t_ripe)
     ripe_probs = F.softmax(ripe_output, dim=1)[0]
     ripe_conf, ripe_idx = torch.max(ripe_probs, 0)
+    predicted_index = ripe_idx.item()
     return {
-        'predicted_class': classes[ripe_idx],
+        'predicted_class': classes[predicted_index],
         'confidence': ripe_conf.item(),
         'probabilities': {name: ripe_probs[i].item() for i, name in enumerate(classes)},
     }

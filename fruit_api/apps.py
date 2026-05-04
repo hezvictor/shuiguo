@@ -34,46 +34,55 @@ def should_skip_model_loading():
 # ==========================================
 # 模型结构定义（必须与训练时完全一致）
 # ==========================================
-class ChannelAttention(nn.Module):
-    def __init__(self, in_planes, ratio=16):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.fc1 = nn.Conv2d(in_planes, in_planes // ratio, 1, bias=False)
-        self.relu1 = nn.ReLU()
-        self.fc2 = nn.Conv2d(in_planes // ratio, in_planes, 1, bias=False)
-        self.sigmoid = nn.Sigmoid()
+class HSigmoid(nn.Module):
+    def __init__(self, inplace: bool = True):
+        super().__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
 
     def forward(self, x):
-        avg_out = self.fc2(self.relu1(self.fc1(self.avg_pool(x))))
-        max_out = self.fc2(self.relu1(self.fc1(self.max_pool(x))))
-        out = avg_out + max_out
-        return self.sigmoid(out)
+        return self.relu(x + 3) / 6
 
-class SpatialAttention(nn.Module):
-    def __init__(self, kernel_size=7):
-        super(SpatialAttention, self).__init__()
-        padding = 3 if kernel_size == 7 else 1
-        self.conv1 = nn.Conv2d(2, 1, kernel_size, padding=padding, bias=False)
-        self.sigmoid = nn.Sigmoid()
+
+class HSwish(nn.Module):
+    def __init__(self, inplace: bool = True):
+        super().__init__()
+        self.sigmoid = HSigmoid(inplace=inplace)
 
     def forward(self, x):
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x_cat = torch.cat([avg_out, max_out], dim=1)
-        out = self.conv1(x_cat)
-        return self.sigmoid(out)
+        return x * self.sigmoid(x)
 
-class CBAM(nn.Module):
-    def __init__(self, planes):
-        super(CBAM, self).__init__()
-        self.ca = ChannelAttention(planes)
-        self.sa = SpatialAttention()
+
+class CoordAttention(nn.Module):
+    def __init__(self, inp: int, oup: int, reduction: int = 32):
+        super().__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+
+        mip = max(8, inp // reduction)
+        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1 = nn.BatchNorm2d(mip)
+        self.act = HSwish()
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
 
     def forward(self, x):
-        x = self.ca(x) * x
-        x = self.sa(x) * x
-        return x
+        identity = x
+        _, _, height, width = x.size()
+
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+
+        y = torch.cat([x_h, x_w], dim=2)
+        y = self.conv1(y)
+        y = self.bn1(y)
+        y = self.act(y)
+
+        x_h, x_w = torch.split(y, [height, width], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+
+        a_h = torch.sigmoid(self.conv_h(x_h))
+        a_w = torch.sigmoid(self.conv_w(x_w))
+        return identity * a_h * a_w
 
 class MobileViT_Plus(nn.Module):
     def __init__(self, num_classes=2):
@@ -83,7 +92,7 @@ class MobileViT_Plus(nn.Module):
             dummy = torch.randn(1, 3, 256, 256)
             features = self.backbone(dummy)
             self.in_channels = features[-1].shape[1]
-        self.cbam = CBAM(self.in_channels)
+        self.ca = CoordAttention(self.in_channels, self.in_channels)
         self.pool = nn.AdaptiveAvgPool2d(1)
         self.head = nn.Sequential(
             nn.Flatten(),
@@ -96,7 +105,7 @@ class MobileViT_Plus(nn.Module):
     def forward(self, x):
         features = self.backbone(x)
         x = features[-1]
-        x = self.cbam(x)
+        x = self.ca(x)
         x = self.pool(x)
         x = self.head(x)
         return x
@@ -126,6 +135,48 @@ class LoginAppConfig(AppConfig):
         yolo_config_dir = Path(settings.BASE_DIR) / '.yolo'
         yolo_config_dir.mkdir(parents=True, exist_ok=True)
         os.environ.setdefault('YOLO_CONFIG_DIR', str(yolo_config_dir))
+
+    @staticmethod
+    def _extract_state_dict(checkpoint):
+        if isinstance(checkpoint, dict):
+            for candidate_key in ('state_dict', 'model_state_dict', 'model'):
+                candidate = checkpoint.get(candidate_key)
+                if isinstance(candidate, dict):
+                    checkpoint = candidate
+                    break
+
+        if not isinstance(checkpoint, dict):
+            raise RuntimeError('熟度模型权重格式无效，未找到 state_dict。')
+
+        normalized_state_dict = {}
+        for key, value in checkpoint.items():
+            normalized_key = key[7:] if key.startswith('module.') else key
+            normalized_state_dict[normalized_key] = value
+        return normalized_state_dict
+
+    @staticmethod
+    def _infer_ripeness_checkpoint_classes(state_dict):
+        for key in ('head.4.weight', 'head.4.bias'):
+            tensor = state_dict.get(key)
+            if tensor is None:
+                continue
+            return int(tensor.shape[0])
+        raise RuntimeError('熟度模型权重缺少分类头，无法推断类别数。')
+
+    def _load_ripeness_model(self, model_path: Path, class_names: list[str]):
+        state_dict = self._extract_state_dict(torch.load(model_path, map_location='cpu'))
+        checkpoint_class_count = self._infer_ripeness_checkpoint_classes(state_dict)
+        expected_class_count = len(class_names)
+        if checkpoint_class_count != expected_class_count:
+            raise RuntimeError(
+                f'熟度模型类别数不匹配: {model_path.name} 输出 {checkpoint_class_count} 类，'
+                f'但配置要求 {expected_class_count} 类。'
+            )
+
+        model = MobileViT_Plus(num_classes=expected_class_count)
+        model.load_state_dict(state_dict)
+        model.eval()
+        return model
 
     def _load_models(self):
         from ultralytics import YOLO
@@ -161,23 +212,19 @@ class LoginAppConfig(AppConfig):
             transforms.Normalize(mean=fruit_prep['MEAN'], std=fruit_prep['STD']),
         ])
 
+        ripeness_class_names = settings.MODEL_CONFIG['RIPENESS_CLASS_NAMES']
+
         # ---------- 芒果熟度模型 ----------
-        self.mango_model = MobileViT_Plus(num_classes=2)
-        self.mango_model.load_state_dict(torch.load(mango_path, map_location='cpu'))
-        self.mango_model.eval()
-        self.mango_classes = ['Ripe (成熟芒果)', 'Unripe (生芒果)']
+        self.mango_model = self._load_ripeness_model(mango_path, ripeness_class_names['mango'])
+        self.mango_classes = ripeness_class_names['mango']
 
         # ---------- 香蕉熟度模型 ----------
-        self.banana_model = MobileViT_Plus(num_classes=2)
-        self.banana_model.load_state_dict(torch.load(banana_path, map_location='cpu'))
-        self.banana_model.eval()
-        self.banana_classes = ['Ripe (成熟香蕉)', 'Unripe (生香蕉)']
+        self.banana_model = self._load_ripeness_model(banana_path, ripeness_class_names['banana'])
+        self.banana_classes = ripeness_class_names['banana']
 
         # ---------- 草莓熟度模型 ----------
-        self.strawberry_model = MobileViT_Plus(num_classes=3)
-        self.strawberry_model.load_state_dict(torch.load(strawberry_path, map_location='cpu'))
-        self.strawberry_model.eval()
-        self.strawberry_classes = ['Half Ripe (半熟草莓)', 'Ripe (全熟草莓)', 'Unripe (生草莓)']
+        self.strawberry_model = self._load_ripeness_model(strawberry_path, ripeness_class_names['strawberry'])
+        self.strawberry_classes = ripeness_class_names['strawberry']
 
         # 通用预处理（熟度模型共用）
         ripe_prep = settings.MODEL_CONFIG['PREPROCESS']['RIPENESS']
@@ -225,7 +272,7 @@ class LoginAppConfig(AppConfig):
     def get_ripeness_info(self, fruit_name):
         """
         根据水果名称返回对应的熟度模型和类别列表。
-        参数 fruit_name: 水果名称（中文，例如“芒果”）。
+        参数 fruit_name: 水果名称（如 `mango`）。
         返回: (model, classes)；如果不支持则返回 (None, None)。
         """
         supported = settings.MODEL_CONFIG['RIPENESS_SUPPORTED']

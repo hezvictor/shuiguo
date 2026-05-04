@@ -147,9 +147,9 @@ MEDIA_ROOT = BASE_DIR / "media"
 MODEL_CONFIG = {
     "BASE_DIR": BASE_DIR / "model",
     "FRUIT_MODEL": "best_model_finetuned.pth",
-    "MANGO_MODEL": "mango_mobilevit_plus.pth",
-    "BANANA_MODEL": "banana_mobilevit_plus.pth",
-    "STRAWBERRY_MODEL": "strawberry_3class_mobilevit.pth",
+    "MANGO_MODEL": "Mango_50_ultimate_model.pth",
+    "BANANA_MODEL": "Banana_50_ultimate_model.pth",
+    "STRAWBERRY_MODEL": "strawberry_ultimate_model.pth",
     "YOLO_MODEL": "epoch90.pt",
     "FRUIT_CLASS_NAMES": [
         "apple", "apricot", "banana", "beetroot", "blackberry", "blueberry", "broccoli", "cabbage",
@@ -177,6 +177,11 @@ MODEL_CONFIG = {
         "mango": {"model_attr": "mango_model", "classes_attr": "mango_classes"},
         "banana": {"model_attr": "banana_model", "classes_attr": "banana_classes"},
         "strawberry": {"model_attr": "strawberry_model", "classes_attr": "strawberry_classes"},
+    },
+    "RIPENESS_CLASS_NAMES": {
+        "mango": ["生", "全熟", "过熟"],
+        "banana": ["生", "全熟", "过熟"],
+        "strawberry": ["全熟", "半熟", "生"],
     },
 }
 

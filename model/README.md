@@ -6,9 +6,9 @@ Please place required model files locally at the following paths:
 
 - `model/epoch90.pt`
 - `model/best_model_finetuned.pth`
-- `model/mango_mobilevit_plus.pth`
-- `model/banana_mobilevit_plus.pth`
-- `model/strawberry_3class_mobilevit.pth`
+- `model/Mango_50_ultimate_model.pth`
+- `model/Banana_50_ultimate_model.pth`
+- `model/strawberry_ultimate_model.pth`
 - `model/monster_runtime/pretrained/mix_all.pth`
 - `model/monster_runtime/pretrained/depth_anything_v2_vitl.pth`
 - `model/monster_runtime/calibration/calib_stereo.npz`

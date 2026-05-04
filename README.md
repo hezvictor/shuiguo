@@ -360,9 +360,9 @@ Copy-Item .env.local.example .env.local
 
 - `model/epoch90.pt`
 - `model/best_model_finetuned.pth`
-- `model/mango_mobilevit_plus.pth`
-- `model/banana_mobilevit_plus.pth`
-- `model/strawberry_3class_mobilevit.pth`
+- `model/Mango_50_ultimate_model.pth`
+- `model/Banana_50_ultimate_model.pth`
+- `model/strawberry_ultimate_model.pth`
 
 这些文件由 `fruit_api/apps.py` 和 `shuiguo/settings.py` 直接引用，文件名必须一致。
 
@@ -538,7 +538,7 @@ daphne -b 0.0.0.0 -p 8000 shuiguo.asgi:application
 7. 在后端根目录创建 `.env.local`。
 8. 创建 MySQL 数据库 `shuiguo_db` 并完成 `python manage.py migrate`。
 9. 把以下文件放到 `model/`：
-   `epoch90.pt`、`best_model_finetuned.pth`、`mango_mobilevit_plus.pth`、`banana_mobilevit_plus.pth`、`strawberry_3class_mobilevit.pth`
+   `epoch90.pt`、`best_model_finetuned.pth`、`Mango_50_ultimate_model.pth`、`Banana_50_ultimate_model.pth`、`strawberry_ultimate_model.pth`
 10. 把以下文件放到 `model/monster_runtime/pretrained/`：
     `mix_all.pth`、`depth_anything_v2_vitl.pth`
 11. 把 `calib_stereo.npz` 放到 `model/monster_runtime/calibration/`。
@@ -561,9 +561,9 @@ daphne -b 0.0.0.0 -p 8000 shuiguo.asgi:application
 
 - `epoch90.pt`
 - `best_model_finetuned.pth`
-- `mango_mobilevit_plus.pth`
-- `banana_mobilevit_plus.pth`
-- `strawberry_3class_mobilevit.pth`
+- `Mango_50_ultimate_model.pth`
+- `Banana_50_ultimate_model.pth`
+- `strawberry_ultimate_model.pth`
 
 ### 18.3 双目果径测量报依赖缺失
 

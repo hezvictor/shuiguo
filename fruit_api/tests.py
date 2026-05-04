@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+import torch
 from asgiref.sync import async_to_sync
 from channels.testing import WebsocketCommunicator
 from django.conf import settings
@@ -26,7 +27,7 @@ from fruit_api.exception_handler import api_exception_handler
 from fruit_api.exceptions import AppNotFoundError, FileLifecycleError
 from fruit_api.models import DetectionHistory
 from fruit_api.services.storage import collect_media_cleanup_targets, delete_media_file, ensure_media_path
-from fruit_api.services.detection.detect_service import InvalidParamError, parse_selected_indices
+from fruit_api.services.detection.detect_service import InvalidParamError, classify_ripeness_by_type, parse_selected_indices
 from fruit_api.services.detection.diameter_app_service import run_measure_distance
 from fruit_api.services.detection.image_batch_service import create_image_detection_task
 from fruit_api.services.detection.upload_resolver_service import UploadResolveError, resolve_image_detection_inputs
@@ -1783,6 +1784,33 @@ class ServiceUnitTests(SimpleTestCase):
     def test_parse_selected_indices_invalid_json(self):
         with self.assertRaises(InvalidParamError):
             parse_selected_indices('not-json')
+
+    def test_classify_ripeness_by_type_returns_new_three_class_payload(self):
+        image = Image.new('RGB', (16, 16), color=(120, 160, 200))
+        mock_model = Mock(return_value=torch.tensor([[0.2, 1.4, 3.1]], dtype=torch.float32))
+        app_config = SimpleNamespace(
+            ripeness_preprocess=lambda _img: torch.zeros((3, 16, 16), dtype=torch.float32),
+            device='cpu',
+            get_ripeness_info=lambda fruit_name: (
+                (mock_model, ['生', '全熟', '过熟']) if fruit_name == 'banana' else (None, None)
+            ),
+        )
+
+        payload = classify_ripeness_by_type(image, 'BANANA', app_config)
+
+        self.assertEqual(payload['fruit_type'], 'banana')
+        self.assertEqual(payload['ripeness_result']['predicted_class'], '过熟')
+        self.assertEqual(set(payload['ripeness_result']['probabilities'].keys()), {'生', '全熟', '过熟'})
+        mock_model.assert_called_once()
+
+    def test_classify_ripeness_by_type_rejects_unsupported_fruit_type(self):
+        image = Image.new('RGB', (16, 16), color=(120, 160, 200))
+        app_config = SimpleNamespace(
+            get_ripeness_info=lambda _fruit_name: (None, None),
+        )
+
+        with self.assertRaises(InvalidParamError):
+            classify_ripeness_by_type(image, 'apple', app_config)
 
     @patch('fruit_api.services.detection.diameter_app_service.get_diameter_service')
     def test_run_measure_inference_strips_private_paths(self, mock_get_diameter_service):
