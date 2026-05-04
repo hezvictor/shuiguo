@@ -566,10 +566,10 @@ class ImageDetectionTaskApiTests(APITestCase):
                     return_value=[{'bbox': [1, 1, 12, 12], 'label': 'fruit', 'confidence': 0.91}],
                 ), patch(
                     'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
-                    return_value={'predicted_class': 'apple', 'confidence': 0.87},
+                    return_value={'predicted_class': 'banana', 'confidence': 0.87},
                 ), patch(
                     'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
-                    return_value={'predicted_class': 'ripe', 'confidence': 0.74},
+                    return_value={'predicted_class': '过熟', 'confidence': 0.74},
                 ):
                     history = create_image_detection_task(
                         user=self.user,
@@ -597,7 +597,9 @@ class ImageDetectionTaskApiTests(APITestCase):
         self.assertEqual(history.status, 'completed')
         self.assertEqual(history.title, '图片检测任务(种类 + 熟度)')
         self.assertEqual(history.summary['total_targets'], 1)
+        self.assertEqual(history.summary['ripeness_counts'], {'banana': {'过熟': 1}})
         self.assertTrue(history.report_file.endswith('.xlsx'))
+        self.assertEqual(history.detail_data['items'][0]['targets'][0]['ripeness']['predicted_class'], '过熟')
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter'], None)
 
     @patch('fruit_api.views_modules.detect_views.apps.get_app_config')
@@ -632,10 +634,10 @@ class ImageDetectionTaskApiTests(APITestCase):
                     return_value=[{'bbox': [1, 1, 12, 12], 'label': 'fruit', 'confidence': 0.91}],
                 ), patch(
                     'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
-                    return_value={'predicted_class': 'apple', 'confidence': 0.87},
+                    return_value={'predicted_class': 'banana', 'confidence': 0.87},
                 ), patch(
                     'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
-                    return_value={'predicted_class': 'ripe', 'confidence': 0.74},
+                    return_value={'predicted_class': '全熟', 'confidence': 0.74},
                 ), patch(
                     'fruit_api.services.detection.image_batch_service.get_diameter_service',
                     return_value=measure_service,
@@ -671,6 +673,7 @@ class ImageDetectionTaskApiTests(APITestCase):
             self.assertEqual(history.status, 'completed')
             self.assertEqual(history.input_count, 2)
             self.assertEqual(len(history.detail_data['items']), 2)
+            self.assertEqual(history.summary['ripeness_counts'], {'banana': {'全熟': 1}})
             self.assertTrue(history.report_file.endswith('.xlsx'))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
@@ -1583,7 +1586,7 @@ class ConsoleApiTests(APITestCase):
             summary={
                 'total_targets': 3,
                 'fruit_counts': {'apple': 2, 'banana': 1},
-                'ripeness_counts': {'banana': {'ripe': 1}},
+                'ripeness_counts': {'banana': {'过熟': 1}},
             },
             report_file='reports/image.json',
         )
@@ -1624,7 +1627,7 @@ class ConsoleApiTests(APITestCase):
         self.assertEqual(resp.data['trends']['daily_type_trend'][0]['diameter'], 1)
         self.assertEqual(resp.data['trends']['daily_avg_diameter_trend'][0]['avg_diameter_mm'], 60.0)
         self.assertEqual(resp.data['analysis']['fruit_ranking'][0], {'fruit': 'apple', 'count': 2})
-        self.assertEqual(resp.data['analysis']['ripeness_distribution'][0], {'fruit': 'banana', 'ripeness': 'ripe', 'count': 1})
+        self.assertEqual(resp.data['analysis']['ripeness_distribution'][0], {'fruit': 'banana', 'ripeness': '过熟', 'count': 1})
         self.assertEqual(resp.data['diameter_analysis']['measure_count'], 1)
         self.assertEqual(resp.data['diameter_analysis']['total_targets'], 4)
         self.assertEqual(resp.data['diameter_analysis']['valid_measurements'], 2)
@@ -1947,10 +1950,10 @@ class ServiceUnitTests(SimpleTestCase):
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
             ), patch(
                 'fruit_api.services.detection.image_batch_service.classify_fruit_crop',
-                return_value={'predicted_class': 'apple', 'confidence': 0.87},
+                return_value={'predicted_class': 'banana', 'confidence': 0.87},
             ), patch(
                 'fruit_api.services.detection.image_batch_service.classify_ripeness_for_fruit_crop',
-                return_value={'predicted_class': 'ripe', 'confidence': 0.74},
+                return_value={'predicted_class': '生', 'confidence': 0.74},
             ), patch(
                 'fruit_api.services.detection.image_batch_service.get_diameter_service',
                 return_value=measure_service,
@@ -1990,6 +1993,8 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
+        self.assertEqual(history.summary['ripeness_counts'], {'banana': {'生': 1}})
+        self.assertEqual(history.detail_data['items'][0]['targets'][0]['ripeness']['predicted_class'], '生')
 
     def test_create_image_detection_task_diameter_group_uses_mixed_style_measurement_pipeline(self):
         media_root = os.path.join(settings.BASE_DIR, 'media', 'test_diameter_group_alignment')
@@ -2086,10 +2091,10 @@ class ServiceUnitTests(SimpleTestCase):
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.classify_fruit_crop',
-                return_value={'predicted_class': 'apple', 'confidence': 0.87},
+                return_value={'predicted_class': 'banana', 'confidence': 0.87},
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.classify_ripeness_for_fruit_crop',
-                return_value={'predicted_class': 'ripe', 'confidence': 0.74},
+                return_value={'predicted_class': '全熟', 'confidence': 0.74},
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.get_camera_registry_service'
             ) as mock_registry:
@@ -2115,6 +2120,8 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
         self.assertEqual(payload['targets'][0]['diameter']['distance_unit'], 'cm')
+        self.assertEqual(payload['summary']['ripeness_counts'], {'banana': {'全熟': 1}})
+        self.assertEqual(payload['targets'][0]['ripeness']['predicted_class'], '全熟')
 
     @patch('fruit_api.services.camera.device_preview_service._encode_frame', return_value=b'jpeg-bytes')
     @patch('fruit_api.services.camera.device_preview_service._cache_preview_frame_snapshot')
