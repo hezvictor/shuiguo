@@ -7,7 +7,7 @@
           <h1>摄像头拍照与配置</h1>
           <p class="hero-text">
             先扫描并同步当前摄像头方案，再设置单摄、双摄和预览设备。拍照会先进入待保存照片组，保存后再生成 ZIP；
-            双目场景请固定为左图摄像机采集黑白图，右图摄像机采集彩图，混合检测和实时混合检测都会默认对右侧彩图执行 YOLO 框选。
+            双目场景请固定为左图摄像机采集彩图，右图摄像机采集黑白图，混合检测和实时混合检测都会默认对左侧彩图执行 YOLO 框选。
           </p>
         </div>
 
@@ -127,8 +127,8 @@
 
               <div class="camera-role-note">
                 <strong>双目相机角色说明</strong>
-                <p>左图摄像机：采集黑白图，用于果径测量配对。</p>
-                <p>右图摄像机：采集彩图，图片检测混合输入和实时混合检测默认对这一路原图执行 YOLO 框选。</p>
+                <p>左图摄像机：采集彩图，图片检测混合输入和实时混合检测默认对这一路原图执行 YOLO 框选。</p>
+                <p>右图摄像机：采集黑白图，用于果径测量配对。</p>
               </div>
             </div>
           </section>
@@ -464,13 +464,26 @@ export default defineComponent({
     const buildCapturePayload = () => {
       const selected = [...previewCameraIndices.value]
       const isDual = selected.length === 2
+      if (!isDual) {
+        return {
+          selected,
+          payload: {
+            camera_indices: selected,
+            capture_mode: 'single',
+            persist: false
+          }
+        }
+      }
+
+      const leftIndex = localSelection.dual_left_camera_index
+      const rightIndex = localSelection.dual_right_camera_index
       return {
         selected,
         payload: {
-          camera_indices: selected,
-          capture_mode: isDual ? 'dual' : 'single',
-          left_camera_index: isDual ? selected[0] : undefined,
-          right_camera_index: isDual ? selected[1] : undefined,
+          camera_indices: [leftIndex, rightIndex],
+          capture_mode: 'dual',
+          left_camera_index: leftIndex,
+          right_camera_index: rightIndex,
           persist: false
         }
       }
@@ -484,6 +497,14 @@ export default defineComponent({
       }
       if (selected.length > 2) {
         errorMessage.value = '拍照仅支持单摄或双摄，请将预览设备控制在 1 到 2 个'
+        return
+      }
+      if (
+        selected.length === 2 &&
+        (!selected.includes(localSelection.dual_left_camera_index) ||
+          !selected.includes(localSelection.dual_right_camera_index))
+      ) {
+        errorMessage.value = '双目拍照时，请勾选已配置的左彩图相机和右黑白图相机，系统会按 left/right 固定命名'
         return
       }
 

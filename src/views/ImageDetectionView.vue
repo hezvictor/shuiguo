@@ -84,12 +84,12 @@
             <div class="section-head">
               <div>
                 <h2>混合输入</h2>
-                <p>只支持 ZIP。每组数据包含左图和右图；默认右图为彩图，左图为黑白图。</p>
+                <p>只支持 ZIP。每组数据包含左图和右图；默认左图为彩图，右图为黑白图。</p>
               </div>
             </div>
             <div class="upload-box" @click="$refs.mixedInput.click()">
               <strong>选择混合 ZIP</strong>
-              <span>后端会先对右图原图做 YOLO，再合并种类、熟度和果径结果</span>
+              <span>后端会先对左图原图做 YOLO，再合并种类、熟度和果径结果</span>
               <input ref="mixedInput" type="file" multiple accept=".zip" hidden @change="onMixedInputsSelected" />
             </div>
             <div v-if="mixedInputs.length" class="preview-grid">
@@ -180,11 +180,11 @@
             <div class="detail-images">
               <figure v-if="item.originalImageUrl">
                 <img :src="item.originalImageUrl" alt="original" />
-                <figcaption>左图 / 原图</figcaption>
+                <figcaption>左图 / 彩图原图</figcaption>
               </figure>
               <figure v-if="item.rightImageUrl">
                 <img :src="item.rightImageUrl" alt="right" />
-                <figcaption>右图</figcaption>
+                <figcaption>右图 / 黑白图</figcaption>
               </figure>
               <figure v-if="item.annotatedImageUrl">
                 <img :src="item.annotatedImageUrl" alt="annotated" />
