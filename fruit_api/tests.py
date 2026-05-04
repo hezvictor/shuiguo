@@ -7,6 +7,7 @@ import tempfile
 import time
 import zipfile
 from datetime import datetime, timedelta, timezone as dt_timezone
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
@@ -935,6 +936,62 @@ class RealtimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(history.detail_data['items'][0]['annotated_image'], 'realtime/last.jpg')
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['classification']['class'], 'apple')
 
+    @patch('fruit_api.services.detection.image_batch_service.classify_fruit_crop')
+    @patch('fruit_api.services.detection.image_batch_service.yolo_targets')
+    def test_save_realtime_report_from_session_generates_excel_history_and_cleans_session(
+        self,
+        mock_yolo_targets,
+        mock_classify_fruit_crop,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'realtime_report_from_session')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_yolo_targets.return_value = [
+                {'bbox': [1, 1, 6, 6], 'label': 'fruit', 'confidence': 0.91},
+            ]
+            mock_classify_fruit_crop.return_value = {'predicted_class': 'apple', 'confidence': 0.88}
+
+            from fruit_api.services.detection.realtime_session_service import get_realtime_session_service
+
+            image_buffer = io.BytesIO()
+            Image.new('RGB', (12, 12), color=(40, 80, 120)).save(image_buffer, format='JPEG')
+
+            with override_settings(MEDIA_ROOT=media_root):
+                session_service = get_realtime_session_service()
+                session_info = session_service.record_sample(
+                    user_id=self.user.id,
+                    session_id=None,
+                    mode='single',
+                    target_group_count=1,
+                    sample_payload={'mode': 'single', 'image_bytes': image_buffer.getvalue()},
+                    metadata={'interval_ms': 2000, 'detect_ripeness': False},
+                )
+
+                resp = self.client.post(
+                    '/api/realtime/save_report/',
+                    {
+                        'session_id': session_info['session_id'],
+                        'mode': 'single',
+                        'interval_ms': 2000,
+                    },
+                    format='json',
+                )
+
+                self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+                history = DetectionHistory.objects.get(user=self.user, detection_type='realtime')
+                self.assertTrue(history.report_file.endswith('.xlsx'))
+                self.assertEqual(history.artifacts['excel_report'], history.report_file)
+                self.assertEqual(history.summary['input_count'], 1)
+                self.assertEqual(history.detail_data['items'][0]['item_type'], 'image')
+                self.assertFalse(
+                    os.path.exists(
+                        os.path.join(media_root, 'realtime_sessions', str(self.user.id), session_info['session_id'])
+                    )
+                )
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
 
 class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
     def setUp(self):
@@ -1300,11 +1357,18 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.client.force_authenticate(user=self.user)
 
     @patch('fruit_api.views_modules.realtime_runtime_views.run_single_camera_realtime_detection')
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_realtime_session_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
-    def test_realtime_detect_current_frame_single_success(self, mock_get_app_config, mock_run_single):
+    def test_realtime_detect_current_frame_single_success(self, mock_get_app_config, mock_get_session_service, mock_run_single):
         mock_app_cfg = Mock()
         mock_app_cfg.ensure_models_loaded = Mock()
         mock_get_app_config.return_value = mock_app_cfg
+        mock_get_session_service.return_value.record_sample.return_value = {
+            'session_id': 'session-a',
+            'captured_group_count': 1,
+            'target_group_count': 10,
+            'completed': False,
+        }
         mock_run_single.return_value = {
             'status': 'success',
             'mode': 'single',
@@ -1313,12 +1377,15 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
             'summary': {'total_targets': 0, 'fruit_counts': {}, 'ripeness_counts': {}},
             'annotated_image_url': '/media/realtime_frames/one.jpg',
             'suggested_interval_ms': 1500,
+            '_session_sample': {'mode': 'single', 'image_bytes': b'frame'},
         }
 
-        resp = self.client.post('/api/realtime/detect/current-frame/', {'mode': 'single'}, format='json')
+        resp = self.client.post('/api/realtime/detect/current-frame/', {'mode': 'single', 'collect_sample': True}, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data['mode'], 'single')
+        self.assertEqual(resp.data['session_id'], 'session-a')
+        self.assertNotIn('_session_sample', resp.data)
         mock_run_single.assert_called_once()
 
     @patch('fruit_api.views_modules.realtime_runtime_views.run_single_preview_frame_realtime_detection')
@@ -2672,6 +2739,40 @@ class ServiceUnitTests(SimpleTestCase):
                 self.assertNotIn('old.jpg', remaining_files)
                 self.assertIn(os.path.basename(saved_rel), remaining_files)
                 self.assertLessEqual(len(remaining_files), 2)
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_realtime_session_service_cleans_expired_sessions(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'realtime_session_cleanup')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            from fruit_api.services.detection.realtime_session_service import RealtimeSessionService
+
+            with override_settings(
+                MEDIA_ROOT=media_root,
+                REALTIME_SESSION_RETENTION_SECONDS=3600,
+                REALTIME_SESSION_CLEANUP_INTERVAL_SECONDS=0,
+            ):
+                service = RealtimeSessionService()
+                expired_dir = Path(media_root) / 'realtime_sessions' / '1' / 'expired-session'
+                fresh_dir = Path(media_root) / 'realtime_sessions' / '1' / 'fresh-session'
+                expired_dir.mkdir(parents=True, exist_ok=True)
+                fresh_dir.mkdir(parents=True, exist_ok=True)
+                (expired_dir / 'meta.json').write_text(
+                    json.dumps({'created_at': '2020-01-01T00:00:00Z', 'updated_at': '2020-01-01T00:00:00Z'}),
+                    encoding='utf-8',
+                )
+                (fresh_dir / 'meta.json').write_text(
+                    json.dumps({'created_at': '2099-01-01T00:00:00Z', 'updated_at': '2099-01-01T00:00:00Z'}),
+                    encoding='utf-8',
+                )
+
+                deleted = service.cleanup_expired_sessions(force=True)
+
+                self.assertEqual(deleted, 1)
+                self.assertFalse(expired_dir.exists())
+                self.assertTrue(fresh_dir.exists())
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 

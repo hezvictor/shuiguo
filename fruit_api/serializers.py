@@ -315,6 +315,10 @@ class RealtimeCurrentFrameDetectSerializer(serializers.Serializer):
     detect_diameter = serializers.BooleanField(required=False, default=False)
     backend = serializers.CharField(required=False, allow_blank=False)
     frame_data_url = serializers.CharField(required=False, allow_blank=False)
+    session_id = serializers.CharField(required=False, allow_blank=False)
+    collect_sample = serializers.BooleanField(required=False, default=False)
+    target_group_count = serializers.IntegerField(required=False, min_value=1, max_value=500, default=10)
+    interval_ms = serializers.IntegerField(required=False, min_value=500, max_value=600000)
 
     def validate(self, attrs):
         mode = attrs.get("mode")
