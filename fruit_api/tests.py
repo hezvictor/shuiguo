@@ -1,5 +1,6 @@
 ﻿import base64
 import io
+import json
 import os
 import shutil
 import tempfile
@@ -1248,6 +1249,28 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.data['record']['group_count'], 3)
 
     @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_list_returns_records_and_staged_groups(self, mock_get_capture_service):
+        mock_get_capture_service.return_value.list_records.return_value = [{'id': 'record-1'}]
+        mock_get_capture_service.return_value.list_staged.return_value = [{'stage_id': 'stage-1'}]
+
+        resp = self.client.get('/api/camera/captures/')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['records'][0]['id'], 'record-1')
+        self.assertEqual(resp.data['staged_groups'][0]['stage_id'], 'stage-1')
+        mock_get_capture_service.return_value.cleanup_expired_staged.assert_called_once_with()
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
+    def test_camera_capture_stage_delete_success(self, mock_get_capture_service):
+        resp = self.client.delete('/api/camera/capture/stages/stage-1/')
+
+        self.assertEqual(resp.status_code, status.HTTP_204_NO_CONTENT)
+        mock_get_capture_service.return_value.delete_staged.assert_called_once_with(
+            user_id=self.user.id,
+            stage_id='stage-1',
+        )
+
+    @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
     def test_camera_capture_delete_success(self, mock_get_capture_service):
         resp = self.client.delete('/api/camera/captures/record-1/')
 
@@ -1998,6 +2021,38 @@ class ServiceUnitTests(SimpleTestCase):
         self.assertGreater(line_pixel[0], line_pixel[2])
         self.assertEqual(payload['targets'][0]['diameter']['distance_unit'], 'cm')
 
+    @patch('fruit_api.services.camera.device_preview_service._encode_frame', return_value=b'jpeg-bytes')
+    @patch('fruit_api.services.camera.device_preview_service._cache_preview_frame_snapshot')
+    @patch('fruit_api.services.camera.device_preview_service.StereoCameraService._release_capture')
+    @patch('fruit_api.services.camera.device_preview_service.StereoCameraService._read_frame')
+    @patch('fruit_api.services.camera.device_preview_service.StereoCameraService._open_capture')
+    def test_device_preview_session_reuses_single_capture_between_frames(
+        self,
+        mock_open_capture,
+        mock_read_frame,
+        mock_release_capture,
+        mock_cache_snapshot,
+        mock_encode_frame,
+    ):
+        mock_open_capture.return_value = object()
+        mock_read_frame.return_value = np.ones((24, 24, 3), dtype=np.uint8)
+
+        from fruit_api.services.camera.device_preview_service import DevicePreviewSession
+
+        session = DevicePreviewSession(yolo_model_getter=lambda: None)
+        session.update_config({'mode': 'single', 'camera_index': 2, 'fps': 12})
+
+        first = session.encode_preview_frame()
+        second = session.encode_preview_frame()
+        session.close()
+
+        self.assertEqual(first, b'jpeg-bytes')
+        self.assertEqual(second, b'jpeg-bytes')
+        self.assertEqual(mock_open_capture.call_count, 1)
+        self.assertEqual(mock_read_frame.call_count, 2)
+        self.assertTrue(mock_cache_snapshot.called)
+        self.assertTrue(mock_release_capture.called)
+
     @patch('fruit_api.services.detection.realtime_pipeline_service._run_dual_realtime_detection_from_frames')
     @patch('fruit_api.services.detection.realtime_pipeline_service.capture_dual_camera_frames')
     @patch('fruit_api.services.detection.realtime_pipeline_service.get_cached_preview_frame_snapshot')
@@ -2080,6 +2135,7 @@ class ServiceUnitTests(SimpleTestCase):
 
                 self.assertEqual(record['capture_mode'], 'bundle')
                 self.assertEqual(record['group_count'], 1)
+                self.assertFalse(service._stage_dir(1, stage_id).exists())
 
                 archive_path = os.path.join(media_root, record['archive_file_path'].replace('/', os.sep))
                 self.assertTrue(os.path.exists(archive_path))
@@ -2093,6 +2149,154 @@ class ServiceUnitTests(SimpleTestCase):
                     for file_info in group['files']
                 }
                 self.assertEqual(set(names), expected_names)
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    def test_camera_capture_service_list_staged_and_cleanup_expired_groups(self):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_staged_cleanup')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(
+                MEDIA_ROOT=media_root,
+                CAMERA_CAPTURE_STAGE_RETENTION_SECONDS=3600,
+                CAMERA_CAPTURE_STAGE_CLEANUP_INTERVAL_SECONDS=0,
+            ):
+                service = CameraCaptureService()
+                old_stage = service._stage_dir(1, 'stage-old')
+                new_stage = service._stage_dir(1, 'stage-new')
+                old_stage.mkdir(parents=True, exist_ok=True)
+                new_stage.mkdir(parents=True, exist_ok=True)
+                (old_stage / 'meta.json').write_text(
+                    json.dumps(
+                        {
+                            'stage_id': 'stage-old',
+                            'group_name': 'old_group',
+                            'capture_mode': 'single',
+                            'created_at': '2020-01-01T00:00:00Z',
+                            'files': [],
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+                (new_stage / 'meta.json').write_text(
+                    json.dumps(
+                        {
+                            'stage_id': 'stage-new',
+                            'group_name': 'new_group',
+                            'capture_mode': 'dual',
+                            'created_at': '2099-01-01T00:00:00Z',
+                            'files': [],
+                        }
+                    ),
+                    encoding='utf-8',
+                )
+
+                groups = service.list_staged(user_id=1)
+
+                self.assertEqual([group['stage_id'] for group in groups], ['stage-new'])
+                self.assertFalse(old_stage.exists())
+                self.assertTrue(new_stage.exists())
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    @patch('fruit_api.services.camera.capture_service.capture_single_camera_frame')
+    @patch('fruit_api.services.camera.capture_service.get_cached_preview_frame_snapshot')
+    @patch('fruit_api.services.camera.capture_service.get_camera_registry_service')
+    def test_camera_capture_service_uses_cached_single_preview_frame_for_capture(
+        self,
+        mock_get_registry_service,
+        mock_get_cached_preview_frame_snapshot,
+        mock_capture_single,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_preview_single')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_get_registry_service.return_value.snapshot.return_value = {
+                'selection': {
+                    'preview_camera_indices': [0],
+                    'single_camera_index': 0,
+                    'dual_left_camera_index': 0,
+                    'dual_right_camera_index': 1,
+                    'backend': '',
+                }
+            }
+            preview_frame = np.full((18, 18, 3), 127, dtype=np.uint8)
+            mock_get_cached_preview_frame_snapshot.return_value = {
+                'config': {
+                    'mode': 'single',
+                    'camera_index': 0,
+                },
+                'captured_at': 123.456,
+                'single_frame': preview_frame,
+                'left_frame': None,
+                'right_frame': None,
+            }
+
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                payload = service.capture(user_id=1, camera_indices=[0], capture_mode='single', persist=False)
+
+            self.assertFalse(payload['persisted'])
+            self.assertEqual(len(payload['staged_groups']), 1)
+            self.assertEqual(payload['staged_groups'][0]['capture_mode'], 'single')
+            self.assertEqual(len(payload['staged_groups'][0]['files']), 1)
+            mock_capture_single.assert_not_called()
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
+    @patch('fruit_api.services.camera.capture_service.capture_dual_camera_frames')
+    @patch('fruit_api.services.camera.capture_service.get_cached_preview_frame_snapshot')
+    @patch('fruit_api.services.camera.capture_service.get_camera_registry_service')
+    def test_camera_capture_service_uses_cached_dual_preview_frames_for_capture(
+        self,
+        mock_get_registry_service,
+        mock_get_cached_preview_frame_snapshot,
+        mock_capture_dual,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'camera_capture_preview_dual')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_get_registry_service.return_value.snapshot.return_value = {
+                'selection': {
+                    'preview_camera_indices': [1, 2],
+                    'single_camera_index': 0,
+                    'dual_left_camera_index': 1,
+                    'dual_right_camera_index': 2,
+                    'backend': '',
+                }
+            }
+            left_frame = np.zeros((20, 20, 3), dtype=np.uint8)
+            right_frame = np.ones((20, 20, 3), dtype=np.uint8) * 255
+            mock_get_cached_preview_frame_snapshot.return_value = {
+                'config': {
+                    'mode': 'dual',
+                    'left_camera_index': 1,
+                    'right_camera_index': 2,
+                },
+                'captured_at': 456.789,
+                'single_frame': None,
+                'left_frame': left_frame,
+                'right_frame': right_frame,
+            }
+
+            from fruit_api.services.camera.capture_service import CameraCaptureService
+
+            with override_settings(MEDIA_ROOT=media_root):
+                service = CameraCaptureService()
+                payload = service.capture(user_id=1, camera_indices=[1, 2], capture_mode='dual', persist=False)
+
+            self.assertFalse(payload['persisted'])
+            self.assertEqual(len(payload['staged_groups']), 1)
+            self.assertEqual(payload['staged_groups'][0]['capture_mode'], 'dual')
+            self.assertEqual(len(payload['staged_groups'][0]['files']), 2)
+            mock_capture_dual.assert_not_called()
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 

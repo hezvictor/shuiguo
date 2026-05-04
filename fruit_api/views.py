@@ -35,6 +35,7 @@ from fruit_api.views_modules.camera_capture_views import (  # noqa: F401
     camera_capture_delete,
     camera_capture_list,
     camera_capture_download,
+    camera_capture_stage_delete,
     camera_capture_stage_save,
 )
 from fruit_api.views_modules.console_views import (  # noqa: F401
@@ -83,6 +84,7 @@ __all__ = [
     'camera_capture_delete',
     'camera_capture_list',
     'camera_capture_download',
+    'camera_capture_stage_delete',
     'camera_capture_stage_save',
     'camera_probe',
     'camera_status',

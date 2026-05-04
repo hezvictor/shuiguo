@@ -54,6 +54,7 @@ urlpatterns = [
                 path('camera/stream/', views.camera_stream, name='camera_stream'),
                 path('camera/capture/', views.camera_capture, name='camera_capture'),
                 path('camera/capture/save/', views.camera_capture_stage_save, name='camera_capture_stage_save'),
+                path('camera/capture/stages/<str:stage_id>/', views.camera_capture_stage_delete, name='camera_capture_stage_delete'),
                 path('camera/captures/', views.camera_capture_list, name='camera_capture_list'),
                 path('camera/captures/download/', views.camera_capture_download, name='camera_capture_download'),
                 path('camera/captures/<str:record_id>/', views.camera_capture_delete, name='camera_capture_delete'),

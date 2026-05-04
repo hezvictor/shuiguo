@@ -151,7 +151,7 @@ class StereoPreviewConsumer(AsyncWebsocketConsumer):
             return
 
         self.preview_manager = _get_preview_manager()
-        self.preview_queue = asyncio.Queue(maxsize=2)
+        self.preview_queue = asyncio.Queue(maxsize=1)
         self.stream_task = asyncio.create_task(self._stream_preview_events())
 
         await self.accept()
@@ -234,7 +234,7 @@ class CameraDevicePreviewConsumer(AsyncWebsocketConsumer):
             return
 
         self.preview_session = DevicePreviewSession(yolo_model_getter=_get_yolo_model)
-        self.preview_queue = asyncio.Queue(maxsize=2)
+        self.preview_queue = asyncio.Queue(maxsize=1)
         self.preview_loop = asyncio.get_running_loop()
         self.preview_stop_event = threading.Event()
         self.preview_worker = None
