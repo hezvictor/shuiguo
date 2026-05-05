@@ -68,6 +68,23 @@ def _sanitize_measure_payload(value):
     return value
 
 
+def _normalize_measure_result_payload(payload: Dict) -> Dict:
+    normalized = dict(payload or {})
+    statistics = normalize_diameter_statistics(
+        normalized.get("diameter_statistics") or normalized.get("statistics")
+    )
+    if statistics is not None:
+        normalized["statistics"] = statistics
+        normalized["diameter_statistics"] = statistics
+    if normalized.get("measurement"):
+        measurement = dict(normalized.get("measurement") or {})
+        if statistics is not None:
+            measurement["statistics"] = statistics
+            measurement["diameter_statistics"] = statistics
+        normalized["measurement"] = measurement
+    return normalized
+
+
 def _save_history(user, payload: Dict) -> None:
     detail_payload = _build_history_payload(payload)
     summary = _build_history_summary(detail_payload)
@@ -92,6 +109,11 @@ def _build_history_summary(payload: Dict) -> Dict:
         "input_count": 1,
         "total_targets": int(payload.get("total_targets") or 0),
         "valid_measurements": int(payload.get("valid_measurements") or 0),
+        "valid_measurements_by_axis": payload.get("valid_measurements_by_axis") or {
+            "horizontal": int(payload.get("valid_measurements") or 0),
+            "vertical": 0,
+        },
+        "measurement_axes": payload.get("measurement_axes") or ["horizontal", "vertical"],
         "statistics": normalize_diameter_statistics(payload.get("statistics")),
         "diameter_statistics": normalize_diameter_statistics(payload.get("statistics")),
         "inference_id": payload.get("inference_id"),
@@ -106,6 +128,8 @@ def _build_history_payload(payload: Dict) -> Dict:
         "message": payload.get("message"),
         "total_targets": payload.get("total_targets"),
         "valid_measurements": payload.get("valid_measurements"),
+        "valid_measurements_by_axis": payload.get("valid_measurements_by_axis"),
+        "measurement_axes": payload.get("measurement_axes"),
         "statistics": payload.get("statistics"),
         "inference_id": measurement.get("inference_id") or payload.get("inference_id"),
         "targets": payload.get("targets") or measurement.get("targets") or [],
@@ -143,6 +167,8 @@ def run_measure_distance(*, user=None, save_history: bool = False, **kwargs) -> 
     except Exception as exc:
         raise DiameterExecutionError(str(exc)) from exc
 
+    payload = _normalize_measure_result_payload(payload)
+
     if save_history and user is not None:
         _save_history(user, payload)
     return _sanitize_measure_payload(payload)
@@ -175,6 +201,8 @@ def measure_and_save_history(
         raise DiameterParamError(str(exc)) from exc
     except Exception as exc:
         raise DiameterExecutionError(str(exc)) from exc
+
+    payload = _normalize_measure_result_payload(payload)
 
     _save_history(
         user,

@@ -6,11 +6,56 @@ from typing import Any, Dict, List
 
 def normalize_diameter_statistics(stats: Dict[str, Any] | None) -> Dict[str, Any]:
     stats = dict(stats or {})
-    return {
+    normalized = {
         "avg_diameter_mm": stats.get("avg_diameter_mm", stats.get("avg_distance_mm")),
         "min_diameter_mm": stats.get("min_diameter_mm", stats.get("min_distance_mm")),
         "max_diameter_mm": stats.get("max_diameter_mm", stats.get("max_distance_mm")),
     }
+    horizontal = stats.get("horizontal")
+    vertical = stats.get("vertical")
+    if isinstance(horizontal, dict):
+        normalized["horizontal"] = normalize_diameter_statistics(horizontal)
+    if isinstance(vertical, dict):
+        normalized["vertical"] = normalize_diameter_statistics(vertical)
+    return normalized
+
+
+def normalize_diameter_payload(diameter: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    if not isinstance(diameter, dict):
+        return None
+    normalized = deepcopy(diameter)
+    axis_payload = normalized.get("diameter_axes") or {}
+    if "horizontal" in normalized or "vertical" in normalized:
+        axis_payload = {
+            "horizontal": normalized.get("horizontal"),
+            "vertical": normalized.get("vertical"),
+            **axis_payload,
+        }
+
+    horizontal = axis_payload.get("horizontal")
+    vertical = axis_payload.get("vertical")
+    normalized["diameter_axes"] = {
+        "horizontal": deepcopy(horizontal) if isinstance(horizontal, dict) else {
+            "distance_mm": normalized.get("distance_mm"),
+            "distance": normalized.get("distance"),
+            "distance_unit": normalized.get("distance_unit"),
+            "status": normalized.get("status"),
+            "point1": normalized.get("point1"),
+            "point2": normalized.get("point2"),
+            "orientation": "horizontal",
+        },
+        "vertical": deepcopy(vertical) if isinstance(vertical, dict) else None,
+    }
+    horizontal_axis = normalized["diameter_axes"]["horizontal"] or {}
+    normalized["distance_mm"] = horizontal_axis.get("distance_mm")
+    normalized["distance"] = horizontal_axis.get("distance")
+    normalized["distance_unit"] = horizontal_axis.get("distance_unit", normalized.get("distance_unit"))
+    normalized["status"] = horizontal_axis.get("status", normalized.get("status"))
+    normalized["point1"] = horizontal_axis.get("point1", normalized.get("point1"))
+    normalized["point2"] = horizontal_axis.get("point2", normalized.get("point2"))
+    normalized["horizontal"] = normalized["diameter_axes"]["horizontal"]
+    normalized["vertical"] = normalized["diameter_axes"]["vertical"]
+    return normalized
 
 
 def _normalize_realtime_target(target: Dict[str, Any]) -> Dict[str, Any]:
@@ -31,6 +76,7 @@ def _normalize_realtime_target(target: Dict[str, Any]) -> Dict[str, Any]:
         }
     item["classification"] = classification
     item["ripeness"] = ripeness
+    item["diameter"] = normalize_diameter_payload(item.get("diameter"))
     return item
 
 
@@ -90,16 +136,24 @@ def build_diameter_history_detail(detail_payload: Dict[str, Any] | None) -> Dict
                 "classification": target.get("classification"),
                 "ripeness": target.get("ripeness"),
                 "diameter": {
-                    "distance_mm": target.get("distance_mm"),
-                    "distance": target.get("distance"),
-                    "distance_unit": target.get("distance_unit"),
-                    "status": target.get("status"),
-                    "point1": target.get("point1"),
-                    "point2": target.get("point2"),
+                    **(normalize_diameter_payload(
+                        {
+                            "distance_mm": target.get("distance_mm"),
+                            "distance": target.get("distance"),
+                            "distance_unit": target.get("distance_unit"),
+                            "status": target.get("status"),
+                            "point1": target.get("point1"),
+                            "point2": target.get("point2"),
+                            "diameter_axes": target.get("diameter_axes"),
+                        }
+                    ) or {}),
                 },
             }
         )
     return {
+        "valid_measurements": payload.get("valid_measurements"),
+        "valid_measurements_by_axis": payload.get("valid_measurements_by_axis"),
+        "measurement_axes": payload.get("measurement_axes") or ["horizontal", "vertical"],
         "items": [
             {
                 "item_type": "diameter_group",
@@ -147,6 +201,13 @@ def normalize_history_detail(instance) -> Dict[str, Any]:
             for item in items:
                 if item.get("statistics") is not None:
                     item["statistics"] = normalize_diameter_statistics(item.get("statistics"))
+                item["targets"] = [
+                    {
+                        **target,
+                        "diameter": normalize_diameter_payload(target.get("diameter")),
+                    }
+                    for target in (item.get("targets") or [])
+                ]
             return detail_data
         return build_diameter_history_detail(
             {

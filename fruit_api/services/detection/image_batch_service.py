@@ -20,6 +20,7 @@ from fruit_api.services.detection.detect_service import (
     yolo_targets,
 )
 from fruit_api.services.detection.diameter_app_service import get_diameter_service
+from fruit_api.services.history_normalization_service import normalize_diameter_payload
 
 
 def _media_root() -> Path:
@@ -88,6 +89,48 @@ def _diameter_text(diameter: Dict[str, Any] | None) -> str | None:
     return None
 
 
+def _diameter_axes(diameter: Dict[str, Any] | None) -> List[tuple[str, Dict[str, Any]]]:
+    normalized = normalize_diameter_payload(diameter)
+    if not normalized:
+        return []
+    axes = normalized.get("diameter_axes") or {}
+    results: List[tuple[str, Dict[str, Any]]] = []
+    for orientation in ("horizontal", "vertical"):
+        axis = axes.get(orientation)
+        if isinstance(axis, dict):
+            results.append((orientation, axis))
+    return results
+
+
+def _build_detection_diameter(measured: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    if measured is None:
+        return None
+    return normalize_diameter_payload(
+        {
+            "distance_mm": measured.get("distance_mm"),
+            "distance": measured.get("distance"),
+            "distance_unit": measured.get("distance_unit"),
+            "status": measured.get("status"),
+            "point1": measured.get("point1"),
+            "point2": measured.get("point2"),
+            "diameter_axes": measured.get("diameter_axes"),
+        }
+    )
+
+
+def _append_diameter_values(diameter: Dict[str, Any] | None, horizontal_values: List[float], vertical_values: List[float]) -> None:
+    normalized = normalize_diameter_payload(diameter)
+    if not normalized:
+        return
+    axes = normalized.get("diameter_axes") or {}
+    horizontal = axes.get("horizontal") or {}
+    vertical = axes.get("vertical") or {}
+    if horizontal.get("distance_mm") is not None:
+        horizontal_values.append(float(horizontal["distance_mm"]))
+    if vertical.get("distance_mm") is not None:
+        vertical_values.append(float(vertical["distance_mm"]))
+
+
 def _render_annotated_image(image: Image.Image, detections: List[Dict[str, Any]]) -> Image.Image:
     annotated = image.copy()
     draw = ImageDraw.Draw(annotated)
@@ -106,20 +149,31 @@ def _render_annotated_image(image: Image.Image, detections: List[Dict[str, Any]]
         label = f"{index + 1}. {display_label}"
         draw.text((x1 + 4, max(0, y1 - 16)), label, fill=(255, 64, 64))
 
-        diameter = detection.get("diameter")
-        point1 = _extract_xy((diameter or {}).get("point1"))
-        point2 = _extract_xy((diameter or {}).get("point2"))
-        distance_label = _diameter_text(diameter)
-        if point1 and point2:
-            draw.line((point1, point2), fill=(255, 0, 0), width=3)
-            radius = 4
-            draw.ellipse((point1[0] - radius, point1[1] - radius, point1[0] + radius, point1[1] + radius), fill=(255, 0, 0))
-            draw.ellipse((point2[0] - radius, point2[1] - radius, point2[0] + radius, point2[1] + radius), fill=(255, 0, 0))
+        axis_rendered = False
+        ordered_axes = sorted(
+            _diameter_axes(detection.get("diameter")),
+            key=lambda item: 0 if item[0] == "vertical" else 1,
+        )
+        for orientation, axis in ordered_axes:
+            point1 = _extract_xy(axis.get("point1"))
+            point2 = _extract_xy(axis.get("point2"))
+            distance_label = _diameter_text(axis)
+            axis_tag = "H" if orientation == "horizontal" else "V"
+            color = (255, 0, 0) if orientation == "horizontal" else (0, 102, 255)
+            if point1 and point2:
+                draw.line((point1, point2), fill=color, width=3)
+                radius = 4
+                draw.ellipse((point1[0] - radius, point1[1] - radius, point1[0] + radius, point1[1] + radius), fill=color)
+                draw.ellipse((point2[0] - radius, point2[1] - radius, point2[0] + radius, point2[1] + radius), fill=color)
+                if distance_label:
+                    midpoint = ((point1[0] + point2[0]) // 2, (point1[1] + point2[1]) // 2)
+                    draw.text((midpoint[0] + 6, max(0, midpoint[1] - 16)), f"{axis_tag}: {distance_label}", fill=color)
+                axis_rendered = True
+        if not axis_rendered:
+            diameter = detection.get("diameter")
+            distance_label = _diameter_text(diameter)
             if distance_label:
-                midpoint = ((point1[0] + point2[0]) // 2, (point1[1] + point2[1]) // 2)
-                draw.text((midpoint[0] + 6, max(0, midpoint[1] - 16)), distance_label, fill=(255, 0, 0))
-        elif distance_label:
-            draw.text((x1 + 4, min(y2 + 4, annotated.height - 16)), distance_label, fill=(255, 0, 0))
+                draw.text((x1 + 4, min(y2 + 4, annotated.height - 16)), distance_label, fill=(255, 0, 0))
     return annotated
 
 
@@ -133,7 +187,13 @@ def _measure_bbox_with_inference(*, inference_id: str, bbox: List[int]):
     return targets[0] if targets else None
 
 
-def _process_standard_image(item: Dict[str, Any], *, task_root: Path, app_config, detect_ripeness: bool) -> Tuple[Dict[str, Any], Dict[str, int], Dict[str, Dict[str, int]], List[float]]:
+def _process_standard_image(
+    item: Dict[str, Any],
+    *,
+    task_root: Path,
+    app_config,
+    detect_ripeness: bool,
+) -> Tuple[Dict[str, Any], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, List[float]]]:
     image = _image_from_bytes(item["content"])
     input_dir = task_root / "inputs"
     output_dir = task_root / "outputs"
@@ -173,11 +233,19 @@ def _process_standard_image(item: Dict[str, Any], *, task_root: Path, app_config
         },
         counts["fruit_counts"],
         counts["ripeness_counts"],
-        [],
+        {
+            "horizontal": [],
+            "vertical": [],
+        },
     )
 
 
-def _process_diameter_group(item: Dict[str, Any], *, task_root: Path, app_config) -> Tuple[Dict[str, Any], Dict[str, int], Dict[str, Dict[str, int]], List[float]]:
+def _process_diameter_group(
+    item: Dict[str, Any],
+    *,
+    task_root: Path,
+    app_config,
+) -> Tuple[Dict[str, Any], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, List[float]]]:
     input_dir = task_root / "diameter_inputs" / item["label"]
     left_rel = _save_bytes(input_dir / item["left_name"], item["left_content"])
     right_rel = _save_bytes(input_dir / item["right_name"], item["right_content"])
@@ -194,22 +262,15 @@ def _process_diameter_group(item: Dict[str, Any], *, task_root: Path, app_config
     )
 
     targets = []
-    diameters = []
+    horizontal_diameters: List[float] = []
+    vertical_diameters: List[float] = []
     for detection in detections:
         measured = _measure_bbox_with_inference(
             inference_id=inference_payload["inference_id"],
             bbox=detection["bbox"],
         )
-        diameter = {
-            "distance_mm": measured.get("distance_mm"),
-            "distance": measured.get("distance"),
-            "distance_unit": measured.get("distance_unit"),
-            "status": measured.get("status"),
-            "point1": measured.get("point1"),
-            "point2": measured.get("point2"),
-        } if measured is not None else None
-        if measured is not None and measured.get("distance_mm") is not None:
-            diameters.append(float(measured["distance_mm"]))
+        diameter = _build_detection_diameter(measured)
+        _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
         targets.append(
             {
                 "bbox": detection.get("bbox"),
@@ -239,15 +300,24 @@ def _process_diameter_group(item: Dict[str, Any], *, task_root: Path, app_config
             "archive_path": item.get("archive_path"),
             "input_source": item.get("input_source"),
             "targets": targets,
-            "statistics": _diameter_stats(diameters),
+            "statistics": _diameter_axis_stats(horizontal_diameters, vertical_diameters),
         },
         {},
         {},
-        diameters,
+        {
+            "horizontal": horizontal_diameters,
+            "vertical": vertical_diameters,
+        },
     )
 
 
-def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, detect_ripeness: bool) -> Tuple[Dict[str, Any], Dict[str, int], Dict[str, Dict[str, int]], List[float]]:
+def _process_mixed_group(
+    item: Dict[str, Any],
+    *,
+    task_root: Path,
+    app_config,
+    detect_ripeness: bool,
+) -> Tuple[Dict[str, Any], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, List[float]]]:
     input_dir = task_root / "mixed_inputs" / item["label"]
     left_rel = _save_bytes(input_dir / item["left_name"], item["left_content"])
     right_rel = _save_bytes(input_dir / item["right_name"], item["right_content"])
@@ -263,23 +333,14 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
         detect_conf=0.25,
     )
 
-    diameters: List[float] = []
+    horizontal_diameters: List[float] = []
+    vertical_diameters: List[float] = []
     targets = []
 
     for detection in detections:
         measured = _measure_bbox_with_inference(inference_id=inference_payload["inference_id"], bbox=detection["bbox"])
-        diameter = None
-        if measured is not None:
-            diameter = {
-                "distance_mm": measured.get("distance_mm"),
-                "distance": measured.get("distance"),
-                "distance_unit": measured.get("distance_unit"),
-                "status": measured.get("status"),
-                "point1": measured.get("point1"),
-                "point2": measured.get("point2"),
-            }
-            if measured.get("distance_mm") is not None:
-                diameters.append(float(measured["distance_mm"]))
+        diameter = _build_detection_diameter(measured)
+        _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
 
         targets.append(
             build_detection_target(
@@ -310,11 +371,14 @@ def _process_mixed_group(item: Dict[str, Any], *, task_root: Path, app_config, d
             "archive_path": item.get("archive_path"),
             "input_source": item.get("input_source"),
             "targets": targets,
-            "statistics": _diameter_stats(diameters),
+            "statistics": _diameter_axis_stats(horizontal_diameters, vertical_diameters),
         },
         counts["fruit_counts"],
         counts["ripeness_counts"],
-        diameters,
+        {
+            "horizontal": horizontal_diameters,
+            "vertical": vertical_diameters,
+        },
     )
 
 
@@ -330,6 +394,28 @@ def _diameter_stats(values: List[float]) -> Dict[str, Any]:
         "min_diameter_mm": round(min(values), 6),
         "max_diameter_mm": round(max(values), 6),
     }
+
+
+def _diameter_axis_stats(horizontal_values: List[float], vertical_values: List[float]) -> Dict[str, Any]:
+    horizontal_stats = _diameter_stats(horizontal_values)
+    vertical_stats = _diameter_stats(vertical_values)
+    return {
+        **horizontal_stats,
+        "horizontal": horizontal_stats,
+        "vertical": vertical_stats,
+    }
+
+
+def _count_valid_measurement_targets(items: List[Dict[str, Any]]) -> int:
+    count = 0
+    for item in items:
+        for target in item.get("targets") or []:
+            axes = (normalize_diameter_payload(target.get("diameter")) or {}).get("diameter_axes") or {}
+            horizontal = axes.get("horizontal") or {}
+            vertical = axes.get("vertical") or {}
+            if horizontal.get("distance_mm") is not None or vertical.get("distance_mm") is not None:
+                count += 1
+    return count
 
 
 def _compose_title(*, detect_classification: bool, detect_ripeness: bool, detect_diameter: bool) -> str:
@@ -362,14 +448,33 @@ def _export_report(task_root: Path, *, title: str, items: List[Dict[str, Any]], 
     summary_sheet.append(["title", title])
     summary_sheet.append(["total_targets", summary.get("total_targets", 0)])
     summary_sheet.append(["valid_measurements", summary.get("valid_measurements", 0)])
+    summary_sheet.append(["valid_measurements_by_axis", json.dumps(summary.get("valid_measurements_by_axis", {}), ensure_ascii=False)])
     summary_sheet.append(["fruit_counts", json.dumps(summary.get("fruit_counts", {}), ensure_ascii=False)])
     summary_sheet.append(["ripeness_counts", json.dumps(summary.get("ripeness_counts", {}), ensure_ascii=False)])
     summary_sheet.append(["diameter_statistics", json.dumps(summary.get("diameter_statistics", {}), ensure_ascii=False)])
 
     detail_sheet = workbook.create_sheet("targets")
-    detail_sheet.append(["item", "item_type", "bbox", "class", "class_conf", "ripeness", "ripeness_conf", "diameter_mm", "status"])
+    detail_sheet.append(
+        [
+            "item",
+            "item_type",
+            "bbox",
+            "class",
+            "class_conf",
+            "ripeness",
+            "ripeness_conf",
+            "horizontal_diameter_mm",
+            "horizontal_status",
+            "vertical_diameter_mm",
+            "vertical_status",
+        ]
+    )
     for item in items:
         for target in item.get("targets") or []:
+            diameter = normalize_diameter_payload(target.get("diameter"))
+            axes = (diameter or {}).get("diameter_axes") or {}
+            horizontal = axes.get("horizontal") or {}
+            vertical = axes.get("vertical") or {}
             detail_sheet.append(
                 [
                     item.get("display_name"),
@@ -379,8 +484,10 @@ def _export_report(task_root: Path, *, title: str, items: List[Dict[str, Any]], 
                     (target.get("classification") or {}).get("confidence") if target.get("classification") else None,
                     (target.get("ripeness") or {}).get("predicted_class") if target.get("ripeness") else None,
                     (target.get("ripeness") or {}).get("confidence") if target.get("ripeness") else None,
-                    (target.get("diameter") or {}).get("distance_mm") if target.get("diameter") else None,
-                    (target.get("diameter") or {}).get("status") if target.get("diameter") else None,
+                    horizontal.get("distance_mm"),
+                    horizontal.get("status"),
+                    vertical.get("distance_mm"),
+                    vertical.get("status"),
                 ]
             )
 
@@ -403,7 +510,7 @@ def execute_image_detection_batch(
     items = []
     fruit_counts: Dict[str, int] = {}
     ripeness_counts: Dict[str, Dict[str, int]] = {}
-    diameter_values: List[float] = []
+    diameter_values = {"horizontal": [], "vertical": []}
 
     total_inputs = len(standard_images) + len(diameter_groups) + len(mixed_groups)
     processed = 0
@@ -418,7 +525,8 @@ def execute_image_detection_batch(
         items.append(item)
         _merge_counts(fruit_counts, item_fruits)
         _merge_nested_counts(ripeness_counts, item_ripeness)
-        diameter_values.extend(item_diameters)
+        diameter_values["horizontal"].extend(item_diameters.get("horizontal", []))
+        diameter_values["vertical"].extend(item_diameters.get("vertical", []))
         processed += 1
 
     for group_item in diameter_groups:
@@ -430,7 +538,8 @@ def execute_image_detection_batch(
         items.append(item)
         _merge_counts(fruit_counts, item_fruits)
         _merge_nested_counts(ripeness_counts, item_ripeness)
-        diameter_values.extend(item_diameters)
+        diameter_values["horizontal"].extend(item_diameters.get("horizontal", []))
+        diameter_values["vertical"].extend(item_diameters.get("vertical", []))
         processed += 1
 
     for mixed_item in mixed_groups:
@@ -443,18 +552,27 @@ def execute_image_detection_batch(
         items.append(item)
         _merge_counts(fruit_counts, item_fruits)
         _merge_nested_counts(ripeness_counts, item_ripeness)
-        diameter_values.extend(item_diameters)
+        diameter_values["horizontal"].extend(item_diameters.get("horizontal", []))
+        diameter_values["vertical"].extend(item_diameters.get("vertical", []))
         processed += 1
 
     total_targets = sum(len(item.get("targets") or []) for item in items)
-    valid_measurements = sum(1 for value in diameter_values if value is not None)
+    valid_measurements = _count_valid_measurement_targets(items)
     summary = {
         "input_count": total_inputs,
         "total_targets": total_targets,
         "fruit_counts": fruit_counts,
         "ripeness_counts": ripeness_counts,
         "valid_measurements": valid_measurements,
-        "diameter_statistics": _diameter_stats([float(v) for v in diameter_values if v is not None]),
+        "valid_measurements_by_axis": {
+            "horizontal": len(diameter_values["horizontal"]),
+            "vertical": len(diameter_values["vertical"]),
+        },
+        "measurement_axes": ["horizontal", "vertical"],
+        "diameter_statistics": _diameter_axis_stats(
+            [float(v) for v in diameter_values["horizontal"] if v is not None],
+            [float(v) for v in diameter_values["vertical"] if v is not None],
+        ),
         "progress": {
             "processed_items": processed,
             "total_items": total_inputs,

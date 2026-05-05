@@ -14,7 +14,10 @@ from fruit_api.services.detection.image_batch_service import (
     execute_image_detection_batch,
 )
 from fruit_api.services.detection.realtime_session_service import get_realtime_session_service
-from fruit_api.services.history_normalization_service import build_realtime_history_detail
+from fruit_api.services.history_normalization_service import (
+    build_realtime_history_detail,
+    normalize_diameter_statistics,
+)
 
 
 class RealtimePayloadError(Exception):
@@ -41,12 +44,20 @@ def build_realtime_summary(data: Dict) -> Dict:
         "interval_ms",
         "sample_count",
         "valid_measurements",
+        "valid_measurements_by_axis",
+        "measurement_axes",
         "statistics",
         "camera_profile",
         "runtime_device",
     ]:
         if key in data:
             summary[key] = data.get(key)
+    diameter_statistics = normalize_diameter_statistics(
+        data.get("diameter_statistics") or data.get("statistics")
+    )
+    if diameter_statistics:
+        summary["diameter_statistics"] = diameter_statistics
+        summary.setdefault("statistics", diameter_statistics)
     return summary
 
 

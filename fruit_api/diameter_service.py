@@ -440,9 +440,12 @@ class FruitDiameterService:
         return value
 
     @staticmethod
-    def _bbox_points(bbox: List[int]) -> Tuple[Dict[str, int], Dict[str, int]]:
+    def _bbox_points(bbox: List[int], orientation: str = "horizontal") -> Tuple[Dict[str, int], Dict[str, int]]:
         x1, y1, x2, y2 = [int(v) for v in bbox]
+        x_center = int(round((x1 + x2) / 2.0))
         y_center = int(round((y1 + y2) / 2.0))
+        if orientation == "vertical":
+            return {"x": x_center, "y": y1}, {"x": x_center, "y": y2}
         return {"x": x1, "y": y_center}, {"x": x2, "y": y_center}
 
     def _measure_points(self, disp: np.ndarray, q: np.ndarray, point1: Dict[str, int], point2: Dict[str, int], patch_size: int) -> Dict[str, Any]:
@@ -514,6 +517,16 @@ class FruitDiameterService:
         stats["min_diameter_mm"] = stats["min_distance_mm"]
         stats["max_diameter_mm"] = stats["max_distance_mm"]
         return stats
+
+    @classmethod
+    def _axis_stats(cls, horizontal_values: List[float], vertical_values: List[float]) -> Dict[str, Any]:
+        horizontal_stats = cls._stats(horizontal_values)
+        vertical_stats = cls._stats(vertical_values)
+        return {
+            **horizontal_stats,
+            "horizontal": horizontal_stats,
+            "vertical": vertical_stats,
+        }
 
     def run_inference(
         self,
@@ -753,46 +766,79 @@ class FruitDiameterService:
             return payload
 
         target_results: List[Dict[str, Any]] = []
-        valid_distances_mm: List[float] = []
+        horizontal_distances_mm: List[float] = []
+        vertical_distances_mm: List[float] = []
+        valid_target_count = 0
         for measured in targets_to_measure:
             current_bbox = [int(v) for v in measured["bbox"]]
-            p1, p2 = self._bbox_points(current_bbox)
             item: Dict[str, Any] = {
                 "index": measured.get("index"),
                 "label": measured.get("label"),
                 "confidence": measured.get("confidence"),
                 "bbox": current_bbox,
             }
-            try:
-                measurement = self._measure_points(disp, q, p1, p2, actual_patch)
-                distance_mm = measurement["distance_mm"]
-                valid_distances_mm.append(distance_mm)
-                item.update(
-                    {
-                        "distance": round(self._distance_to_unit(distance_mm, distance_unit), 6),
-                        "distance_unit": distance_unit,
-                        "distance_mm": round(distance_mm, 6),
-                        "point1": measurement["point1"],
-                        "point2": measurement["point2"],
-                        "status": "ok",
-                    }
-                )
-                if annotated_canvas is not None:
-                    label = measured.get("label") or "target"
-                    self._draw_bbox(annotated_canvas, current_bbox, label, (0, 255, 0))
-                    self._draw_measurement(
-                        annotated_canvas,
-                        measurement["point1"],
-                        measurement["point2"],
-                        f"{label} {item['distance']:.2f} {distance_unit}",
-                        (255, 0, 0),
+            axis_results: Dict[str, Dict[str, Any]] = {}
+            axis_has_success = False
+            for orientation, color, short_label in (
+                ("horizontal", (255, 0, 0), "H"),
+                ("vertical", (0, 165, 255), "V"),
+            ):
+                p1, p2 = self._bbox_points(current_bbox, orientation=orientation)
+                axis_item: Dict[str, Any] = {
+                    "orientation": orientation,
+                    "distance": None,
+                    "distance_unit": distance_unit,
+                    "distance_mm": None,
+                    "point1": p1,
+                    "point2": p2,
+                }
+                try:
+                    measurement = self._measure_points(disp, q, p1, p2, actual_patch)
+                    distance_mm = measurement["distance_mm"]
+                    axis_item.update(
+                        {
+                            "distance": round(self._distance_to_unit(distance_mm, distance_unit), 6),
+                            "distance_mm": round(distance_mm, 6),
+                            "point1": measurement["point1"],
+                            "point2": measurement["point2"],
+                            "status": "ok",
+                        }
                     )
-            except Exception as exc:
-                item["status"] = str(exc)
-                item["distance"] = None
-                item["distance_unit"] = distance_unit
-                item["point1"] = p1
-                item["point2"] = p2
+                    axis_has_success = True
+                    if orientation == "horizontal":
+                        horizontal_distances_mm.append(distance_mm)
+                    else:
+                        vertical_distances_mm.append(distance_mm)
+                    if annotated_canvas is not None:
+                        label = measured.get("label") or "target"
+                        self._draw_measurement(
+                            annotated_canvas,
+                            measurement["point1"],
+                            measurement["point2"],
+                            f"{label} {short_label} {axis_item['distance']:.2f} {distance_unit}",
+                            color,
+                        )
+                except Exception as exc:
+                    axis_item["status"] = str(exc)
+                axis_results[orientation] = axis_item
+
+            primary_axis = axis_results["horizontal"]
+            item.update(
+                {
+                    "distance": primary_axis.get("distance"),
+                    "distance_unit": primary_axis.get("distance_unit", distance_unit),
+                    "distance_mm": primary_axis.get("distance_mm"),
+                    "point1": primary_axis.get("point1"),
+                    "point2": primary_axis.get("point2"),
+                    "status": primary_axis.get("status"),
+                    "diameter_axes": axis_results,
+                }
+            )
+            if axis_has_success:
+                valid_target_count += 1
+            if annotated_canvas is not None:
+                label = measured.get("label") or "target"
+                self._draw_bbox(annotated_canvas, current_bbox, label, (0, 255, 0))
             target_results.append(item)
 
         job_dir = self._job_dir(inference_id) if inference_id else effective_disp_path.parent
@@ -809,7 +855,13 @@ class FruitDiameterService:
                     "inference_id": inference_id,
                     "request_id": request_id,
                     "targets": target_results,
-                    "statistics": self._stats(valid_distances_mm),
+                    "measurement_axes": ["horizontal", "vertical"],
+                    "valid_measurements": valid_target_count,
+                    "valid_measurements_by_axis": {
+                        "horizontal": len(horizontal_distances_mm),
+                        "vertical": len(vertical_distances_mm),
+                    },
+                    "statistics": self._axis_stats(horizontal_distances_mm, vertical_distances_mm),
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -819,17 +871,37 @@ class FruitDiameterService:
 
         with csv_path.open("w", encoding="utf-8-sig", newline="") as csv_file:
             writer = csv.writer(csv_file)
-            writer.writerow(["index", "label", "confidence", "bbox", "distance", "distance_unit", "status"])
+            writer.writerow(
+                [
+                    "index",
+                    "label",
+                    "confidence",
+                    "bbox",
+                    "horizontal_distance",
+                    "horizontal_distance_mm",
+                    "horizontal_status",
+                    "vertical_distance",
+                    "vertical_distance_mm",
+                    "vertical_status",
+                    "distance_unit",
+                ]
+            )
             for item in target_results:
+                horizontal_axis = (item.get("diameter_axes") or {}).get("horizontal") or {}
+                vertical_axis = (item.get("diameter_axes") or {}).get("vertical") or {}
                 writer.writerow(
                     [
                         item.get("index"),
                         item.get("label"),
                         item.get("confidence"),
                         json.dumps(item.get("bbox", []), ensure_ascii=False),
-                        item.get("distance"),
+                        horizontal_axis.get("distance"),
+                        horizontal_axis.get("distance_mm"),
+                        horizontal_axis.get("status"),
+                        vertical_axis.get("distance"),
+                        vertical_axis.get("distance_mm"),
+                        vertical_axis.get("status"),
                         item.get("distance_unit"),
-                        item.get("status"),
                     ]
                 )
 
@@ -839,8 +911,13 @@ class FruitDiameterService:
             "inference_id": inference_id,
             "targets": target_results,
             "total_targets": len(target_results),
-            "valid_measurements": len(valid_distances_mm),
-            "statistics": self._stats(valid_distances_mm),
+            "valid_measurements": valid_target_count,
+            "valid_measurements_by_axis": {
+                "horizontal": len(horizontal_distances_mm),
+                "vertical": len(vertical_distances_mm),
+            },
+            "measurement_axes": ["horizontal", "vertical"],
+            "statistics": self._axis_stats(horizontal_distances_mm, vertical_distances_mm),
             "annotated_image_path": str(annotated_path.resolve()) if annotated_path else None,
             "annotated_image_url": self._media_url(self._relative_media_path(annotated_path)) if annotated_path else None,
             "result_json_path": str(result_json_path.resolve()),
@@ -893,7 +970,7 @@ class FruitDiameterService:
             )
 
         if not infer_result.get("detections"):
-            empty_stats = self._stats([])
+            empty_stats = self._axis_stats([], [])
             empty_measurement = {
                 "success": True,
                 "message": "no fruit detected",
@@ -901,6 +978,11 @@ class FruitDiameterService:
                 "targets": [],
                 "total_targets": 0,
                 "valid_measurements": 0,
+                "valid_measurements_by_axis": {
+                    "horizontal": 0,
+                    "vertical": 0,
+                },
+                "measurement_axes": ["horizontal", "vertical"],
                 "statistics": empty_stats,
                 "annotated_image_path": infer_result.get("detect_vis_path"),
                 "annotated_image_url": infer_result.get("detect_vis_url"),
@@ -921,6 +1003,11 @@ class FruitDiameterService:
                 "targets": [],
                 "total_targets": 0,
                 "valid_measurements": 0,
+                "valid_measurements_by_axis": {
+                    "horizontal": 0,
+                    "vertical": 0,
+                },
+                "measurement_axes": ["horizontal", "vertical"],
                 "statistics": empty_stats,
                 "visualization_url": infer_result.get("detect_vis_url"),
                 "visualization_file": self._relative_media_path(Path(infer_result["detect_vis_path"])) if infer_result.get("detect_vis_path") else None,
@@ -942,7 +1029,10 @@ class FruitDiameterService:
             "targets": measure_result["targets"],
             "total_targets": measure_result["total_targets"],
             "valid_measurements": measure_result["valid_measurements"],
+            "valid_measurements_by_axis": measure_result["valid_measurements_by_axis"],
+            "measurement_axes": measure_result["measurement_axes"],
             "statistics": measure_result["statistics"],
+            "diameter_statistics": measure_result["statistics"],
             "visualization_url": measure_result["annotated_image_url"],
             "visualization_file": self._relative_media_path(Path(measure_result["annotated_image_path"])) if measure_result.get("annotated_image_path") else None,
             "runtime_device": infer_result.get("runtime_device"),

@@ -268,6 +268,70 @@ class DetectionHistoryApiTests(APITestCase):
         self.assertEqual(resp.data['summary']['diameter_statistics']['avg_diameter_mm'], 66.2)
         self.assertEqual(resp.data['detail_data']['items'][0]['item_type'], 'diameter_group')
 
+    def test_history_detail_preserves_horizontal_and_vertical_diameter_axes(self):
+        row = DetectionHistory.objects.create(
+            user=self.user,
+            detection_type='diameter',
+            summary={
+                'total_targets': 1,
+                'valid_measurements': 1,
+                'valid_measurements_by_axis': {'horizontal': 1, 'vertical': 1},
+                'statistics': {
+                    'avg_distance_mm': 66.2,
+                    'min_distance_mm': 66.2,
+                    'max_distance_mm': 66.2,
+                    'horizontal': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+                    'vertical': {'avg_distance_mm': 48.4, 'min_distance_mm': 48.4, 'max_distance_mm': 48.4},
+                },
+            },
+            detail_data={
+                'items': [
+                    {
+                        'item_type': 'diameter_group',
+                        'display_name': 'group1',
+                        'targets': [
+                            {
+                                'bbox': [1, 2, 10, 12],
+                                'label': 'apple',
+                                'diameter': {
+                                    'diameter_axes': {
+                                        'horizontal': {
+                                            'distance_mm': 66.2,
+                                            'distance': 66.2,
+                                            'distance_unit': 'mm',
+                                            'status': 'ok',
+                                            'point1': {'x': 1, 'y': 7},
+                                            'point2': {'x': 10, 'y': 7},
+                                        },
+                                        'vertical': {
+                                            'distance_mm': 48.4,
+                                            'distance': 48.4,
+                                            'distance_unit': 'mm',
+                                            'status': 'ok',
+                                            'point1': {'x': 5, 'y': 2},
+                                            'point2': {'x': 5, 'y': 12},
+                                        },
+                                    }
+                                },
+                            }
+                        ],
+                        'statistics': {
+                            'horizontal': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+                            'vertical': {'avg_distance_mm': 48.4, 'min_distance_mm': 48.4, 'max_distance_mm': 48.4},
+                        },
+                    }
+                ]
+            },
+        )
+
+        resp = self.client.get(f'/api/detection/history/{row.id}/')
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        diameter = resp.data['detail_data']['items'][0]['targets'][0]['diameter']
+        self.assertEqual(diameter['distance_mm'], 66.2)
+        self.assertEqual(diameter['diameter_axes']['horizontal']['distance_mm'], 66.2)
+        self.assertEqual(diameter['diameter_axes']['vertical']['distance_mm'], 48.4)
+        self.assertEqual(resp.data['summary']['diameter_statistics']['vertical']['avg_diameter_mm'], 48.4)
+
     def test_history_delete_also_removes_report_file(self):
         td = os.path.join(settings.BASE_DIR, 'media', 'test_history_delete')
         shutil.rmtree(td, ignore_errors=True)
@@ -617,6 +681,24 @@ class ImageDetectionTaskApiTests(APITestCase):
                     'point1': {'x': 1, 'y': 5},
                     'point2': {'x': 10, 'y': 5},
                     'status': 'ok',
+                    'diameter_axes': {
+                        'horizontal': {
+                            'distance': 66.2,
+                            'distance_unit': 'mm',
+                            'distance_mm': 66.2,
+                            'point1': {'x': 1, 'y': 5},
+                            'point2': {'x': 10, 'y': 5},
+                            'status': 'ok',
+                        },
+                        'vertical': {
+                            'distance': 52.8,
+                            'distance_unit': 'mm',
+                            'distance_mm': 52.8,
+                            'point1': {'x': 5, 'y': 1},
+                            'point2': {'x': 5, 'y': 10},
+                            'status': 'ok',
+                        },
+                    },
                 }
             ]
         }
@@ -668,6 +750,9 @@ class ImageDetectionTaskApiTests(APITestCase):
             self.assertEqual(history.input_count, 2)
             self.assertEqual(len(history.detail_data['items']), 2)
             self.assertEqual(history.summary['ripeness_counts'], {'banana': {'全熟': 1}})
+            self.assertEqual(history.summary['diameter_statistics']['horizontal']['avg_diameter_mm'], 66.2)
+            self.assertEqual(history.summary['diameter_statistics']['vertical']['avg_diameter_mm'], 52.8)
+            self.assertEqual(history.summary['valid_measurements_by_axis'], {'horizontal': 1, 'vertical': 1})
             self.assertTrue(history.report_file.endswith('.xlsx'))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
@@ -795,11 +880,37 @@ class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
                     'point1': {'x': 1, 'y': 7},
                     'point2': {'x': 10, 'y': 7},
                     'status': 'ok',
+                    'diameter_axes': {
+                        'horizontal': {
+                            'distance': 66.2,
+                            'distance_unit': 'mm',
+                            'distance_mm': 66.2,
+                            'point1': {'x': 1, 'y': 7},
+                            'point2': {'x': 10, 'y': 7},
+                            'status': 'ok',
+                        },
+                        'vertical': {
+                            'distance': 48.4,
+                            'distance_unit': 'mm',
+                            'distance_mm': 48.4,
+                            'point1': {'x': 5, 'y': 2},
+                            'point2': {'x': 5, 'y': 12},
+                            'status': 'ok',
+                        },
+                    },
                 }
             ],
             'total_targets': 1,
             'valid_measurements': 1,
-            'statistics': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+            'valid_measurements_by_axis': {'horizontal': 1, 'vertical': 1},
+            'measurement_axes': ['horizontal', 'vertical'],
+            'statistics': {
+                'avg_distance_mm': 66.2,
+                'min_distance_mm': 66.2,
+                'max_distance_mm': 66.2,
+                'horizontal': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+                'vertical': {'avg_distance_mm': 48.4, 'min_distance_mm': 48.4, 'max_distance_mm': 48.4},
+            },
             'annotated_image_path': 'diameter/measure_targets.png',
             'result_json_path': 'diameter/measure_targets.json',
             'csv_path': 'diameter/measure_targets.csv',
@@ -812,6 +923,10 @@ class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
         history = DetectionHistory.objects.get(user=self.user, detection_type='diameter')
         self.assertEqual(history.cover_image, 'diameter/measure_targets.png')
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_mm'], 66.2)
+        self.assertEqual(
+            history.detail_data['items'][0]['targets'][0]['diameter']['diameter_axes']['vertical']['distance_mm'],
+            48.4,
+        )
 
     def test_measure_infer_missing_right_image(self):
         resp = self.client.post(
@@ -894,6 +1009,85 @@ class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data['status'], 'success')
 
+    @patch('fruit_api.services.detection.diameter_app_service.get_diameter_service')
+    def test_measure_and_save_history_returns_axis_metadata_for_left_image_yolo_chain(self, mock_get_diameter_service):
+        mock_get_diameter_service.return_value.run_full_measurement.return_value = {
+            'status': 'success',
+            'message': '果径测量完成',
+            'targets': [
+                {
+                    'index': 0,
+                    'label': 'apple',
+                    'confidence': 0.95,
+                    'bbox': [1, 2, 10, 12],
+                    'distance': 66.2,
+                    'distance_unit': 'mm',
+                    'distance_mm': 66.2,
+                    'point1': {'x': 1, 'y': 7},
+                    'point2': {'x': 10, 'y': 7},
+                    'status': 'ok',
+                    'diameter_axes': {
+                        'horizontal': {
+                            'distance': 66.2,
+                            'distance_unit': 'mm',
+                            'distance_mm': 66.2,
+                            'point1': {'x': 1, 'y': 7},
+                            'point2': {'x': 10, 'y': 7},
+                            'status': 'ok',
+                        },
+                        'vertical': {
+                            'distance': 48.4,
+                            'distance_unit': 'mm',
+                            'distance_mm': 48.4,
+                            'point1': {'x': 5, 'y': 2},
+                            'point2': {'x': 5, 'y': 12},
+                            'status': 'ok',
+                        },
+                    },
+                }
+            ],
+            'total_targets': 1,
+            'valid_measurements': 1,
+            'valid_measurements_by_axis': {'horizontal': 1, 'vertical': 1},
+            'measurement_axes': ['horizontal', 'vertical'],
+            'statistics': {
+                'avg_distance_mm': 66.2,
+                'min_distance_mm': 66.2,
+                'max_distance_mm': 66.2,
+                'horizontal': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+                'vertical': {'avg_distance_mm': 48.4, 'min_distance_mm': 48.4, 'max_distance_mm': 48.4},
+            },
+            'measurement': {
+                'inference_id': 'infer-left-yolo',
+                'result_json_path': 'diameter_tmp/infer-left-yolo/measure_targets.json',
+                'csv_path': 'diameter_tmp/infer-left-yolo/measure_targets.csv',
+            },
+            'inference': {
+                'left_image_path': 'diameter_tmp/infer-left-yolo/left_input.png',
+                'right_image_path': 'diameter_tmp/infer-left-yolo/right_input.png',
+            },
+            'visualization_file': 'diameter_tmp/infer-left-yolo/measure_targets.png',
+        }
+
+        from fruit_api.services.detection.diameter_app_service import measure_and_save_history
+
+        payload = measure_and_save_history(
+            user=self.user,
+            yolo_model=Mock(),
+            left_image=self._image_file('left.png'),
+            right_image=self._image_file('right.png'),
+            conf=0.25,
+            save_vis=True,
+        )
+
+        self.assertEqual(payload['valid_measurements_by_axis'], {'horizontal': 1, 'vertical': 1})
+        self.assertEqual(payload['measurement_axes'], ['horizontal', 'vertical'])
+        self.assertEqual(payload['diameter_statistics']['vertical']['avg_diameter_mm'], 48.4)
+        history = DetectionHistory.objects.get(user=self.user, detection_type='diameter')
+        self.assertEqual(history.summary['valid_measurements_by_axis'], {'horizontal': 1, 'vertical': 1})
+        self.assertEqual(history.summary['diameter_statistics']['vertical']['avg_diameter_mm'], 48.4)
+        self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['diameter_axes']['vertical']['distance_mm'], 48.4)
+
 
 class RealtimeApiTests(ErrorPayloadAssertMixin, APITestCase):
     def setUp(self):
@@ -933,6 +1127,47 @@ class RealtimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         history = DetectionHistory.objects.get(user=self.user, detection_type='realtime')
         self.assertEqual(history.detail_data['items'][0]['annotated_image'], 'realtime/last.jpg')
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['classification']['class'], 'apple')
+
+    def test_save_realtime_report_legacy_payload_preserves_axis_statistics(self):
+        payload = {
+            'total_targets': 1,
+            'fruit_counts': {'apple': 1},
+            'ripeness_counts': {},
+            'valid_measurements': 1,
+            'valid_measurements_by_axis': {'horizontal': 1, 'vertical': 1},
+            'measurement_axes': ['horizontal', 'vertical'],
+            'statistics': {
+                'avg_distance_mm': 66.2,
+                'min_distance_mm': 66.2,
+                'max_distance_mm': 66.2,
+                'horizontal': {'avg_distance_mm': 66.2, 'min_distance_mm': 66.2, 'max_distance_mm': 66.2},
+                'vertical': {'avg_distance_mm': 48.4, 'min_distance_mm': 48.4, 'max_distance_mm': 48.4},
+            },
+            'last_capture': {
+                'annotated_image': 'realtime/last.jpg',
+                'targets': [
+                    {
+                        'source_mode': 'dual',
+                        'bbox': [1, 2, 10, 12],
+                        'label': 'apple',
+                        'confidence': 0.95,
+                        'diameter': {
+                            'diameter_axes': {
+                                'horizontal': {'distance_mm': 66.2, 'status': 'ok'},
+                                'vertical': {'distance_mm': 48.4, 'status': 'ok'},
+                            }
+                        },
+                    }
+                ],
+            },
+        }
+
+        resp = self.client.post('/api/realtime/save_report/', payload, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_201_CREATED)
+        history = DetectionHistory.objects.get(user=self.user, detection_type='realtime')
+        self.assertEqual(history.summary['valid_measurements_by_axis'], {'horizontal': 1, 'vertical': 1})
+        self.assertEqual(history.summary['diameter_statistics']['vertical']['avg_diameter_mm'], 48.4)
 
     @patch('fruit_api.services.detection.image_batch_service.yolo_targets')
     def test_save_realtime_report_from_session_generates_excel_history_and_cleans_session(
@@ -1548,10 +1783,11 @@ class ConsoleApiTests(APITestCase):
         self.other_user = User.objects.create_user(username='console_other', password='pass1234')
         self.client.force_authenticate(user=self.user)
 
-    def _create_history(self, *, user=None, detection_type='image', summary=None, created_at=None, report_file=None):
+    def _create_history(self, *, user=None, detection_type='image', summary=None, created_at=None, report_file=None, options=None):
         row = DetectionHistory.objects.create(
             user=user or self.user,
             detection_type=detection_type,
+            options=options or {},
             summary=summary or {},
             report_file=report_file,
         )
@@ -1587,10 +1823,13 @@ class ConsoleApiTests(APITestCase):
             summary={
                 'total_targets': 4,
                 'valid_measurements': 2,
+                'valid_measurements_by_axis': {'horizontal': 2, 'vertical': 1},
                 'statistics': {
                     'avg_diameter_mm': 60.0,
                     'min_diameter_mm': 55.0,
                     'max_diameter_mm': 66.0,
+                    'horizontal': {'avg_diameter_mm': 60.0, 'min_diameter_mm': 55.0, 'max_diameter_mm': 66.0},
+                    'vertical': {'avg_diameter_mm': 50.0, 'min_diameter_mm': 50.0, 'max_diameter_mm': 50.0},
                 },
             },
             report_file='diameter/result.png',
@@ -1622,10 +1861,13 @@ class ConsoleApiTests(APITestCase):
         self.assertEqual(resp.data['diameter_analysis']['measure_count'], 1)
         self.assertEqual(resp.data['diameter_analysis']['total_targets'], 4)
         self.assertEqual(resp.data['diameter_analysis']['valid_measurements'], 2)
+        self.assertEqual(resp.data['diameter_analysis']['valid_measurements_by_axis'], {'horizontal': 2, 'vertical': 1})
         self.assertEqual(resp.data['diameter_analysis']['success_rate'], 50.0)
         self.assertEqual(resp.data['diameter_analysis']['avg_diameter_mm'], 60.0)
         self.assertEqual(resp.data['diameter_analysis']['min_diameter_mm'], 55.0)
         self.assertEqual(resp.data['diameter_analysis']['max_diameter_mm'], 66.0)
+        self.assertEqual(resp.data['diameter_analysis']['horizontal']['avg_diameter_mm'], 60.0)
+        self.assertEqual(resp.data['diameter_analysis']['vertical']['avg_diameter_mm'], 50.0)
     def test_console_recent_returns_latest_items(self):
         base_time = datetime(2026, 4, 27, 8, 0, 0, tzinfo=dt_timezone.utc)
         for index in range(12):
@@ -1669,6 +1911,84 @@ class ConsoleApiTests(APITestCase):
         self.assertEqual(overview_resp.data['summary_cards']['detection_count'], 2)
         self.assertEqual(recent_resp.status_code, status.HTTP_200_OK)
         self.assertEqual(len(recent_resp.data['recent_histories']), 2)
+
+    def test_console_overview_accepts_frontend_last30days_alias(self):
+        created_at = datetime(2026, 4, 27, 8, 0, 0, tzinfo=dt_timezone.utc)
+        self._create_history(
+            detection_type='image',
+            created_at=created_at,
+            summary={'total_targets': 3, 'fruit_counts': {'apple': 3}},
+        )
+
+        with patch('fruit_api.services.console_service.timezone.now', return_value=datetime(2026, 4, 27, 12, 0, 0, tzinfo=dt_timezone.utc)):
+            resp = self.client.get('/api/console/overview/?range_type=last30days&timezone=UTC')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['summary_cards']['detection_count'], 1)
+        self.assertEqual(resp.data['summary_cards']['total_targets'], 3)
+
+    def test_console_recent_accepts_frontend_last7days_alias(self):
+        created_at = datetime(2026, 4, 27, 8, 0, 0, tzinfo=dt_timezone.utc)
+        self._create_history(
+            detection_type='realtime',
+            created_at=created_at,
+            summary={'total_targets': 5},
+        )
+
+        with patch('fruit_api.services.console_service.timezone.now', return_value=datetime(2026, 4, 27, 12, 0, 0, tzinfo=dt_timezone.utc)):
+            resp = self.client.get('/api/console/recent/?range_type=last7days&timezone=UTC')
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(resp.data['recent_histories']), 1)
+        self.assertEqual(resp.data['recent_histories'][0]['summary']['total_targets'], 5)
+
+    def test_console_overview_counts_realtime_and_image_diameter_records_without_false_positives(self):
+        created_at = datetime(2026, 4, 27, 8, 0, 0, tzinfo=dt_timezone.utc)
+        self._create_history(
+            detection_type='image',
+            created_at=created_at,
+            options={'detect_diameter': False},
+            summary={'total_targets': 3, 'valid_measurements': 0},
+        )
+        self._create_history(
+            detection_type='image',
+            created_at=created_at + timedelta(minutes=1),
+            options={'detect_diameter': True},
+            summary={
+                'total_targets': 2,
+                'valid_measurements': 1,
+                'valid_measurements_by_axis': {'horizontal': 1, 'vertical': 1},
+                'diameter_statistics': {
+                    'horizontal': {'avg_diameter_mm': 64.0, 'min_diameter_mm': 64.0, 'max_diameter_mm': 64.0},
+                    'vertical': {'avg_diameter_mm': 50.0, 'min_diameter_mm': 50.0, 'max_diameter_mm': 50.0},
+                },
+            },
+        )
+        self._create_history(
+            detection_type='realtime',
+            created_at=created_at + timedelta(minutes=2),
+            options={'mode': 'hybrid'},
+            summary={
+                'total_targets': 1,
+                'valid_measurements': 1,
+                'valid_measurements_by_axis': {'horizontal': 1, 'vertical': 0},
+                'diameter_statistics': {
+                    'horizontal': {'avg_diameter_mm': 70.0, 'min_diameter_mm': 70.0, 'max_diameter_mm': 70.0},
+                    'vertical': {'avg_diameter_mm': None, 'min_diameter_mm': None, 'max_diameter_mm': None},
+                },
+            },
+        )
+
+        resp = self.client.get(
+            '/api/console/overview/?range_type=custom&start_date=2026-04-27&end_date=2026-04-27&timezone=UTC'
+        )
+
+        self.assertEqual(resp.status_code, status.HTTP_200_OK)
+        self.assertEqual(resp.data['diameter_analysis']['measure_count'], 2)
+        self.assertEqual(resp.data['diameter_analysis']['valid_measurements'], 2)
+        self.assertEqual(resp.data['diameter_analysis']['valid_measurements_by_axis'], {'horizontal': 2, 'vertical': 1})
+        self.assertEqual(resp.data['diameter_analysis']['horizontal']['avg_diameter_mm'], 67.0)
+        self.assertEqual(resp.data['diameter_analysis']['vertical']['avg_diameter_mm'], 50.0)
 
     @patch('fruit_api.services.console_service.get_stereo_calibration_service')
     @patch('fruit_api.services.console_service.get_measure_runtime_status')
@@ -1930,6 +2250,24 @@ class ServiceUnitTests(SimpleTestCase):
                     'point1': {'x': 12, 'y': 24},
                     'point2': {'x': 30, 'y': 24},
                     'status': 'ok',
+                    'diameter_axes': {
+                        'horizontal': {
+                            'distance': 6.62,
+                            'distance_unit': 'cm',
+                            'distance_mm': 66.2,
+                            'point1': {'x': 12, 'y': 24},
+                            'point2': {'x': 30, 'y': 24},
+                            'status': 'ok',
+                        },
+                        'vertical': {
+                            'distance': 5.01,
+                            'distance_unit': 'cm',
+                            'distance_mm': 50.1,
+                            'point1': {'x': 21, 'y': 12},
+                            'point2': {'x': 21, 'y': 30},
+                            'status': 'ok',
+                        },
+                    },
                 }
             ]
         }
@@ -1976,14 +2314,21 @@ class ServiceUnitTests(SimpleTestCase):
                 annotated_path = os.path.join(media_root, history.detail_data['items'][0]['annotated_image'].replace('/', os.sep))
                 annotated_image = Image.open(annotated_path).convert('RGB')
                 line_pixel = annotated_image.getpixel((21, 24))
+                vertical_pixel = annotated_image.getpixel((21, 18))
                 detection_pixel = mock_yolo_targets.call_args[0][0].getpixel((0, 0))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertGreater(vertical_pixel[2], vertical_pixel[0])
+        self.assertGreater(vertical_pixel[2], vertical_pixel[1])
         self.assertEqual(detection_pixel, (200, 10, 10))
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
+        self.assertEqual(
+            history.detail_data['items'][0]['targets'][0]['diameter']['diameter_axes']['vertical']['distance_mm'],
+            50.1,
+        )
         self.assertEqual(history.summary['ripeness_counts'], {'banana': {'生': 1}})
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['ripeness']['predicted_class'], '生')
 
@@ -2002,6 +2347,24 @@ class ServiceUnitTests(SimpleTestCase):
                     'point1': {'x': 12, 'y': 24},
                     'point2': {'x': 30, 'y': 24},
                     'status': 'ok',
+                    'diameter_axes': {
+                        'horizontal': {
+                            'distance': 6.62,
+                            'distance_unit': 'cm',
+                            'distance_mm': 66.2,
+                            'point1': {'x': 12, 'y': 24},
+                            'point2': {'x': 30, 'y': 24},
+                            'status': 'ok',
+                        },
+                        'vertical': {
+                            'distance': 4.88,
+                            'distance_unit': 'cm',
+                            'distance_mm': 48.8,
+                            'point1': {'x': 21, 'y': 12},
+                            'point2': {'x': 21, 'y': 30},
+                            'status': 'ok',
+                        },
+                    },
                 }
             ]
         }
@@ -2044,14 +2407,21 @@ class ServiceUnitTests(SimpleTestCase):
                 annotated_path = os.path.join(media_root, history.detail_data['items'][0]['annotated_image'].replace('/', os.sep))
                 annotated_image = Image.open(annotated_path).convert('RGB')
                 line_pixel = annotated_image.getpixel((21, 24))
+                vertical_pixel = annotated_image.getpixel((21, 18))
                 detection_pixel = mock_yolo_targets.call_args[0][0].getpixel((0, 0))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertGreater(vertical_pixel[2], vertical_pixel[0])
+        self.assertGreater(vertical_pixel[2], vertical_pixel[1])
         self.assertEqual(detection_pixel, (200, 10, 10))
         self.assertEqual(history.detail_data['items'][0]['targets'][0]['diameter']['distance_unit'], 'cm')
+        self.assertEqual(
+            history.detail_data['items'][0]['targets'][0]['diameter']['diameter_axes']['vertical']['distance_mm'],
+            48.8,
+        )
         self.assertIsNone(history.detail_data['items'][0]['targets'][0]['classification'])
 
     def test_realtime_hybrid_annotates_diameter_on_result_image(self):
@@ -2069,6 +2439,24 @@ class ServiceUnitTests(SimpleTestCase):
                     'point1': {'x': 12, 'y': 24},
                     'point2': {'x': 30, 'y': 24},
                     'status': 'ok',
+                    'diameter_axes': {
+                        'horizontal': {
+                            'distance': 6.62,
+                            'distance_unit': 'cm',
+                            'distance_mm': 66.2,
+                            'point1': {'x': 12, 'y': 24},
+                            'point2': {'x': 30, 'y': 24},
+                            'status': 'ok',
+                        },
+                        'vertical': {
+                            'distance': 4.94,
+                            'distance_unit': 'cm',
+                            'distance_mm': 49.4,
+                            'point1': {'x': 21, 'y': 12},
+                            'point2': {'x': 21, 'y': 30},
+                            'status': 'ok',
+                        },
+                    },
                 }
             ]
         }
@@ -2106,14 +2494,18 @@ class ServiceUnitTests(SimpleTestCase):
                 annotated_path = os.path.join(media_root, payload['annotated_image'].replace('/', os.sep))
                 annotated_image = Image.open(annotated_path).convert('RGB')
                 line_pixel = annotated_image.getpixel((21, 24))
+                vertical_pixel = annotated_image.getpixel((21, 18))
                 detection_pixel = mock_yolo_targets.call_args[0][0].getpixel((0, 0))
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
         self.assertGreater(line_pixel[0], line_pixel[1])
         self.assertGreater(line_pixel[0], line_pixel[2])
+        self.assertGreater(vertical_pixel[2], vertical_pixel[0])
+        self.assertGreater(vertical_pixel[2], vertical_pixel[1])
         self.assertEqual(detection_pixel, (255, 0, 0))
         self.assertEqual(payload['targets'][0]['diameter']['distance_unit'], 'cm')
+        self.assertEqual(payload['targets'][0]['diameter']['diameter_axes']['vertical']['distance_mm'], 49.4)
         self.assertEqual(payload['summary']['ripeness_counts'], {'banana': {'全熟': 1}})
         self.assertEqual(payload['targets'][0]['ripeness']['predicted_class'], '全熟')
 

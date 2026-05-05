@@ -18,6 +18,7 @@ from fruit_api.services.camera import capture_dual_camera_frames, capture_single
 from fruit_api.services.camera.registry_service import get_camera_registry_service
 from fruit_api.services.detection.detect_service import build_detection_target, summarize_targets, yolo_targets
 from fruit_api.services.detection.diameter_app_service import get_diameter_service
+from fruit_api.services.history_normalization_service import normalize_diameter_payload
 
 
 _last_realtime_frame_cleanup_at = 0.0
@@ -121,6 +122,103 @@ def _diameter_text(diameter: Dict[str, Any] | None) -> str | None:
     return None
 
 
+def _diameter_axes(diameter: Dict[str, Any] | None) -> List[tuple[str, Dict[str, Any]]]:
+    normalized = normalize_diameter_payload(diameter)
+    if not normalized:
+        return []
+    axes = normalized.get("diameter_axes") or {}
+    results: List[tuple[str, Dict[str, Any]]] = []
+    for orientation in ("horizontal", "vertical"):
+        axis = axes.get(orientation)
+        if isinstance(axis, dict):
+            results.append((orientation, axis))
+    return results
+
+
+def _build_detection_diameter(measured: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    if measured is None:
+        return None
+    return normalize_diameter_payload(
+        {
+            "distance_mm": measured.get("distance_mm"),
+            "distance": measured.get("distance"),
+            "distance_unit": measured.get("distance_unit"),
+            "status": measured.get("status"),
+            "point1": measured.get("point1"),
+            "point2": measured.get("point2"),
+            "diameter_axes": measured.get("diameter_axes"),
+        }
+    )
+
+
+def _append_diameter_values(diameter: Dict[str, Any] | None, horizontal_values: List[float], vertical_values: List[float]) -> None:
+    normalized = normalize_diameter_payload(diameter)
+    if not normalized:
+        return
+    axes = normalized.get("diameter_axes") or {}
+    horizontal = axes.get("horizontal") or {}
+    vertical = axes.get("vertical") or {}
+    if horizontal.get("distance_mm") is not None:
+        horizontal_values.append(float(horizontal["distance_mm"]))
+    if vertical.get("distance_mm") is not None:
+        vertical_values.append(float(vertical["distance_mm"]))
+
+
+def _diameter_axis_stats(horizontal_values: List[float], vertical_values: List[float]) -> Dict[str, Any]:
+    def _single(values: List[float]) -> Dict[str, Any]:
+        if not values:
+            return {
+                "avg_diameter_mm": None,
+                "min_diameter_mm": None,
+                "max_diameter_mm": None,
+            }
+        return {
+            "avg_diameter_mm": round(sum(values) / len(values), 6),
+            "min_diameter_mm": round(min(values), 6),
+            "max_diameter_mm": round(max(values), 6),
+        }
+
+    horizontal_stats = _single(horizontal_values)
+    vertical_stats = _single(vertical_values)
+    return {
+        **horizontal_stats,
+        "horizontal": horizontal_stats,
+        "vertical": vertical_stats,
+    }
+
+
+def _empty_axis_aggregate() -> Dict[str, Any]:
+    return {
+        "sum_mm": 0.0,
+        "count": 0,
+        "min_mm": None,
+        "max_mm": None,
+    }
+
+
+def build_empty_realtime_axis_summary() -> Dict[str, Any]:
+    return {
+        "valid_measurements_by_axis": {
+            "horizontal": 0,
+            "vertical": 0,
+        },
+        "diameter_axes": {
+            "horizontal": _empty_axis_aggregate(),
+            "vertical": _empty_axis_aggregate(),
+        },
+    }
+
+
+def _has_valid_diameter(diameter: Dict[str, Any] | None) -> bool:
+    normalized = normalize_diameter_payload(diameter)
+    if not normalized:
+        return False
+    axes = normalized.get("diameter_axes") or {}
+    horizontal = axes.get("horizontal") or {}
+    vertical = axes.get("vertical") or {}
+    return horizontal.get("distance_mm") is not None or vertical.get("distance_mm") is not None
+
+
 def _render_annotated(image: Image.Image, detections: List[Dict[str, Any]]) -> Image.Image:
     annotated = image.copy()
     draw = ImageDraw.Draw(annotated)
@@ -138,20 +236,31 @@ def _render_annotated(image: Image.Image, detections: List[Dict[str, Any]]) -> I
             display_label = f"{display_label}/{ripeness['predicted_class']}"
         draw.text((x1 + 4, max(0, y1 - 16)), f"{index + 1}. {display_label}", fill=(255, 64, 64))
 
-        diameter = detection.get("diameter")
-        point1 = _extract_xy((diameter or {}).get("point1"))
-        point2 = _extract_xy((diameter or {}).get("point2"))
-        distance_label = _diameter_text(diameter)
-        if point1 and point2:
-            draw.line((point1, point2), fill=(255, 0, 0), width=3)
-            radius = 4
-            draw.ellipse((point1[0] - radius, point1[1] - radius, point1[0] + radius, point1[1] + radius), fill=(255, 0, 0))
-            draw.ellipse((point2[0] - radius, point2[1] - radius, point2[0] + radius, point2[1] + radius), fill=(255, 0, 0))
+        axis_rendered = False
+        ordered_axes = sorted(
+            _diameter_axes(detection.get("diameter")),
+            key=lambda item: 0 if item[0] == "vertical" else 1,
+        )
+        for orientation, axis in ordered_axes:
+            point1 = _extract_xy(axis.get("point1"))
+            point2 = _extract_xy(axis.get("point2"))
+            distance_label = _diameter_text(axis)
+            axis_tag = "H" if orientation == "horizontal" else "V"
+            color = (255, 0, 0) if orientation == "horizontal" else (0, 102, 255)
+            if point1 and point2:
+                draw.line((point1, point2), fill=color, width=3)
+                radius = 4
+                draw.ellipse((point1[0] - radius, point1[1] - radius, point1[0] + radius, point1[1] + radius), fill=color)
+                draw.ellipse((point2[0] - radius, point2[1] - radius, point2[0] + radius, point2[1] + radius), fill=color)
+                if distance_label:
+                    midpoint = ((point1[0] + point2[0]) // 2, (point1[1] + point2[1]) // 2)
+                    draw.text((midpoint[0] + 6, max(0, midpoint[1] - 16)), f"{axis_tag}: {distance_label}", fill=color)
+                axis_rendered = True
+        if not axis_rendered:
+            diameter = detection.get("diameter")
+            distance_label = _diameter_text(diameter)
             if distance_label:
-                midpoint = ((point1[0] + point2[0]) // 2, (point1[1] + point2[1]) // 2)
-                draw.text((midpoint[0] + 6, max(0, midpoint[1] - 16)), distance_label, fill=(255, 0, 0))
-        elif distance_label:
-            draw.text((x1 + 4, min(y2 + 4, annotated.height - 16)), distance_label, fill=(255, 0, 0))
+                draw.text((x1 + 4, min(y2 + 4, annotated.height - 16)), distance_label, fill=(255, 0, 0))
     return annotated
 
 
@@ -286,18 +395,11 @@ def _run_dual_realtime_detection_from_frames(
             conf=0.25,
         )
         targets = []
-        diameters = []
+        horizontal_diameters: List[float] = []
+        vertical_diameters: List[float] = []
         for item in payload.get("targets") or []:
-            diameter = {
-                "distance_mm": item.get("distance_mm"),
-                "distance": item.get("distance"),
-                "distance_unit": item.get("distance_unit"),
-                "status": item.get("status"),
-                "point1": item.get("point1"),
-                "point2": item.get("point2"),
-            }
-            if item.get("distance_mm") is not None:
-                diameters.append(float(item["distance_mm"]))
+            diameter = _build_detection_diameter(item)
+            _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
             targets.append(
                 {
                     "bbox": item.get("bbox"),
@@ -309,11 +411,7 @@ def _run_dual_realtime_detection_from_frames(
                     "source_mode": "dual",
                 }
             )
-        stats = {
-            "avg_diameter_mm": round(sum(diameters) / len(diameters), 6) if diameters else None,
-            "min_diameter_mm": round(min(diameters), 6) if diameters else None,
-            "max_diameter_mm": round(max(diameters), 6) if diameters else None,
-        }
+        stats = _diameter_axis_stats(horizontal_diameters, vertical_diameters)
         annotated_image = payload.get("visualization_file")
         return {
             "status": "success",
@@ -321,10 +419,16 @@ def _run_dual_realtime_detection_from_frames(
             "targets": targets,
             "summary": {
                 "total_targets": len(targets),
-                "valid_measurements": len(diameters),
+                "valid_measurements": sum(1 for target in targets if _has_valid_diameter(target.get("diameter"))),
+                "valid_measurements_by_axis": {
+                    "horizontal": len(horizontal_diameters),
+                    "vertical": len(vertical_diameters),
+                },
+                "measurement_axes": ["horizontal", "vertical"],
                 "fruit_counts": {},
                 "ripeness_counts": {},
                 "statistics": stats,
+                "diameter_statistics": stats,
             },
             "annotated_image": annotated_image,
             "annotated_image_url": _media_url(annotated_image) if annotated_image else None,
@@ -351,7 +455,8 @@ def _run_dual_realtime_detection_from_frames(
         detect_ripeness=detect_ripeness,
         source_mode="hybrid",
     )
-    diameters = []
+    horizontal_diameters: List[float] = []
+    vertical_diameters: List[float] = []
     merged_targets = []
     for target in classified_targets:
         measured = get_diameter_service().measure_distance(
@@ -360,26 +465,12 @@ def _run_dual_realtime_detection_from_frames(
             save_annotated=False,
         )
         measured_target = (measured.get("targets") or [None])[0]
-        diameter = None
-        if measured_target is not None:
-            diameter = {
-                "distance_mm": measured_target.get("distance_mm"),
-                "distance": measured_target.get("distance"),
-                "distance_unit": measured_target.get("distance_unit"),
-                "status": measured_target.get("status"),
-                "point1": measured_target.get("point1"),
-                "point2": measured_target.get("point2"),
-            }
-            if measured_target.get("distance_mm") is not None:
-                diameters.append(float(measured_target["distance_mm"]))
+        diameter = _build_detection_diameter(measured_target)
+        _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
         target["diameter"] = diameter
         merged_targets.append(target)
 
-    stats = {
-        "avg_diameter_mm": round(sum(diameters) / len(diameters), 6) if diameters else None,
-        "min_diameter_mm": round(min(diameters), 6) if diameters else None,
-        "max_diameter_mm": round(max(diameters), 6) if diameters else None,
-    }
+    stats = _diameter_axis_stats(horizontal_diameters, vertical_diameters)
     annotated_rel = _save_pil_image(_render_annotated(left_image, merged_targets or detections), "hybrid")
     return {
         "status": "success",
@@ -387,10 +478,16 @@ def _run_dual_realtime_detection_from_frames(
         "targets": merged_targets,
         "summary": {
             "total_targets": len(merged_targets),
-            "valid_measurements": len(diameters),
+            "valid_measurements": sum(1 for target in merged_targets if _has_valid_diameter(target.get("diameter"))),
+            "valid_measurements_by_axis": {
+                "horizontal": len(horizontal_diameters),
+                "vertical": len(vertical_diameters),
+            },
+            "measurement_axes": ["horizontal", "vertical"],
             "fruit_counts": fruit_counts,
             "ripeness_counts": ripeness_counts,
             "statistics": stats,
+            "diameter_statistics": stats,
         },
         "annotated_image": annotated_rel,
         "annotated_image_url": _media_url(annotated_rel),
