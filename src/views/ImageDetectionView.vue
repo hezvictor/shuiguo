@@ -202,11 +202,17 @@
               <el-table-column label="熟度" min-width="160">
                 <template #default="{ row }">{{ translateRipenessLabel(row.ripeness?.predicted_class) }}</template>
               </el-table-column>
-              <el-table-column label="果径(mm)" width="120">
-                <template #default="{ row }">{{ formatDiameter(row.diameter?.distance_mm) }}</template>
+              <el-table-column label="横向果径(mm)" width="140">
+                <template #default="{ row }">{{ formatDiameter(getAxisDistance(row, 'horizontal')) }}</template>
               </el-table-column>
-              <el-table-column label="状态" min-width="120">
-                <template #default="{ row }">{{ row.diameter?.status || 'ok' }}</template>
+              <el-table-column label="横向状态" min-width="120">
+                <template #default="{ row }">{{ getAxisStatus(row, 'horizontal') }}</template>
+              </el-table-column>
+              <el-table-column label="竖向果径(mm)" width="140">
+                <template #default="{ row }">{{ formatDiameter(getAxisDistance(row, 'vertical')) }}</template>
+              </el-table-column>
+              <el-table-column label="竖向状态" min-width="120">
+                <template #default="{ row }">{{ getAxisStatus(row, 'vertical') }}</template>
               </el-table-column>
             </el-table>
           </div>
@@ -580,6 +586,19 @@ export default {
     },
     formatDiameter(value) {
       return value === null || value === undefined ? '-' : Number(value).toFixed(2)
+    },
+    getAxis(row, axisName) {
+      return row?.diameter?.diameter_axes?.[axisName] || null
+    },
+    getAxisDistance(row, axisName) {
+      const axis = this.getAxis(row, axisName)
+      if (!axis || axis.distance_mm === null || axis.distance_mm === undefined) return null
+      return Number(axis.distance_mm)
+    },
+    getAxisStatus(row, axisName) {
+      const axis = this.getAxis(row, axisName)
+      if (!axis) return '-'
+      return axis.status || 'ok'
     },
     compactTitle(record) {
       const title = record.title || `图片检测 #${record.id}`

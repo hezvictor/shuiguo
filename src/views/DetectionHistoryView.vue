@@ -112,9 +112,14 @@
         <div v-if="diameterStatistics" class="stat-section">
           <h4>果径统计</h4>
           <p>有效测量：{{ currentDetail.summary?.valid_measurements ?? 0 }}</p>
-          <p>平均果径：{{ formatNumber(diameterStatistics.avg_diameter_mm) }} mm</p>
-          <p>最小果径：{{ formatNumber(diameterStatistics.min_diameter_mm) }} mm</p>
-          <p>最大果径：{{ formatNumber(diameterStatistics.max_diameter_mm) }} mm</p>
+          <p>横向有效数：{{ validMeasurementsByAxis.horizontal }}</p>
+          <p>竖向有效数：{{ validMeasurementsByAxis.vertical }}</p>
+          <p>横向平均果径：{{ formatNumber(diameterStatistics.horizontal?.avg_diameter_mm) }} mm</p>
+          <p>横向最小果径：{{ formatNumber(diameterStatistics.horizontal?.min_diameter_mm) }} mm</p>
+          <p>横向最大果径：{{ formatNumber(diameterStatistics.horizontal?.max_diameter_mm) }} mm</p>
+          <p>竖向平均果径：{{ formatNumber(diameterStatistics.vertical?.avg_diameter_mm) }} mm</p>
+          <p>竖向最小果径：{{ formatNumber(diameterStatistics.vertical?.min_diameter_mm) }} mm</p>
+          <p>竖向最大果径：{{ formatNumber(diameterStatistics.vertical?.max_diameter_mm) }} mm</p>
         </div>
 
         <div v-if="detailOperations.length" class="stat-section">
@@ -172,11 +177,17 @@
               <el-table-column label="熟度" min-width="180">
                 <template #default="{ row }">{{ translateRipenessLabel(row.ripeness?.predicted_class) }}</template>
               </el-table-column>
-              <el-table-column label="果径(mm)" width="110">
-                <template #default="{ row }">{{ formatNumber(row.diameter?.distance_mm) }}</template>
+              <el-table-column label="横向果径(mm)" width="130">
+                <template #default="{ row }">{{ formatNumber(getAxisDistance(row, 'horizontal')) }}</template>
               </el-table-column>
-              <el-table-column label="状态" min-width="120">
-                <template #default="{ row }">{{ row.diameter?.status || 'ok' }}</template>
+              <el-table-column label="横向状态" min-width="120">
+                <template #default="{ row }">{{ getAxisStatus(row, 'horizontal') }}</template>
+              </el-table-column>
+              <el-table-column label="竖向果径(mm)" width="130">
+                <template #default="{ row }">{{ formatNumber(getAxisDistance(row, 'vertical')) }}</template>
+              </el-table-column>
+              <el-table-column label="竖向状态" min-width="120">
+                <template #default="{ row }">{{ getAxisStatus(row, 'vertical') }}</template>
               </el-table-column>
             </el-table>
           </article>
@@ -354,6 +365,23 @@ export default {
       return summary.diameter_statistics || summary.statistics || null
     })
 
+    const validMeasurementsByAxis = computed(() => {
+      const summary = currentDetail.value?.summary || {}
+      return summary.valid_measurements_by_axis || { horizontal: 0, vertical: 0 }
+    })
+
+    const getAxis = (row, axisName) => row?.diameter?.diameter_axes?.[axisName] || null
+    const getAxisDistance = (row, axisName) => {
+      const axis = getAxis(row, axisName)
+      if (!axis || axis.distance_mm === null || axis.distance_mm === undefined) return null
+      return Number(axis.distance_mm)
+    }
+    const getAxisStatus = (row, axisName) => {
+      const axis = getAxis(row, axisName)
+      if (!axis) return '-'
+      return axis.status || 'ok'
+    }
+
     const detailOperations = computed(() => {
       const operations = currentDetail.value?.detail_data?.operations || {}
       return Object.entries(operations)
@@ -432,12 +460,15 @@ export default {
       sortedRipenessData,
       normalizedDetailItems,
       diameterStatistics,
+      validMeasurementsByAxis,
       detailOperations,
       detailContextRows,
       itemTypeText,
       itemHasTargets,
       itemSummaryText,
       historySummaryText,
+      getAxisDistance,
+      getAxisStatus,
       openImagePreview,
       translateFruitLabel,
       translateRipenessLabel

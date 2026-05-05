@@ -116,12 +116,24 @@
             <strong>{{ formatPercent(diameterAnalysis.success_rate) }}</strong>
           </div>
           <div class="metric-card">
-            <span>平均果径</span>
-            <strong>{{ formatMetric(diameterAnalysis.avg_diameter_mm, 'mm', 2) }}</strong>
+            <span>横向平均果径</span>
+            <strong>{{ formatMetric(diameterAnalysis.horizontal?.avg_diameter_mm, 'mm', 2) }}</strong>
           </div>
           <div class="metric-card">
-            <span>最小 / 最大</span>
-            <strong>{{ minMaxDiameterText }}</strong>
+            <span>竖向平均果径</span>
+            <strong>{{ formatMetric(diameterAnalysis.vertical?.avg_diameter_mm, 'mm', 2) }}</strong>
+          </div>
+          <div class="metric-card">
+            <span>横向最小 / 最大</span>
+            <strong>{{ horizontalMinMaxDiameterText }}</strong>
+          </div>
+          <div class="metric-card">
+            <span>竖向最小 / 最大</span>
+            <strong>{{ verticalMinMaxDiameterText }}</strong>
+          </div>
+          <div class="metric-card">
+            <span>横向 / 竖向有效数</span>
+            <strong>{{ diameterAxisCountText }}</strong>
           </div>
         </div>
       </article>
@@ -232,7 +244,7 @@ export default {
       systemLoading: false,
       lastUpdatedAt: null,
       filters: {
-        rangeType: 'today',
+        rangeType: 'last30days',
         detectionType: 'all',
         timezone: this.getBrowserTimezone(),
         customDates: []
@@ -320,10 +332,19 @@ export default {
         fruit: translateFruitLabel(item.fruit)
       }))
     },
-    minMaxDiameterText() {
-      const min = this.formatMetric(this.diameterAnalysis.min_diameter_mm, 'mm', 2)
-      const max = this.formatMetric(this.diameterAnalysis.max_diameter_mm, 'mm', 2)
+    horizontalMinMaxDiameterText() {
+      const min = this.formatMetric(this.diameterAnalysis.horizontal?.min_diameter_mm, 'mm', 2)
+      const max = this.formatMetric(this.diameterAnalysis.horizontal?.max_diameter_mm, 'mm', 2)
       return `${min} / ${max}`
+    },
+    verticalMinMaxDiameterText() {
+      const min = this.formatMetric(this.diameterAnalysis.vertical?.min_diameter_mm, 'mm', 2)
+      const max = this.formatMetric(this.diameterAnalysis.vertical?.max_diameter_mm, 'mm', 2)
+      return `${min} / ${max}`
+    },
+    diameterAxisCountText() {
+      const counts = this.diameterAnalysis.valid_measurements_by_axis || {}
+      return `${counts.horizontal || 0} / ${counts.vertical || 0}`
     },
     lastUpdatedText() {
       return this.lastUpdatedAt ? this.lastUpdatedAt.toLocaleString('zh-CN') : '尚未加载'

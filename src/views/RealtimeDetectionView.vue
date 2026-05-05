@@ -174,12 +174,24 @@
                 <strong>{{ capturedGroupCount }} / {{ targetGroupCount }}</strong>
               </div>
               <div v-if="showDiameterMetrics" class="metric-box">
-                <span>平均果径</span>
-                <strong>{{ diameterMetric('avg') }}</strong>
+                <span>横向平均果径</span>
+                <strong>{{ diameterMetric('horizontal', 'avg') }}</strong>
               </div>
               <div v-if="showDiameterMetrics" class="metric-box">
-                <span>有效果径数</span>
+                <span>竖向平均果径</span>
+                <strong>{{ diameterMetric('vertical', 'avg') }}</strong>
+              </div>
+              <div v-if="showDiameterMetrics" class="metric-box">
+                <span>有效目标数</span>
                 <strong>{{ sessionSummary.valid_measurements }}</strong>
+              </div>
+              <div v-if="showDiameterMetrics" class="metric-box">
+                <span>横向有效数</span>
+                <strong>{{ sessionSummary.valid_measurements_by_axis.horizontal }}</strong>
+              </div>
+              <div v-if="showDiameterMetrics" class="metric-box">
+                <span>竖向有效数</span>
+                <strong>{{ sessionSummary.valid_measurements_by_axis.vertical }}</strong>
               </div>
             </div>
 
@@ -231,11 +243,39 @@ function createEmptySummary() {
     fruit_counts: {},
     ripeness_counts: {},
     valid_measurements: 0,
-    diameter_sum_mm: 0,
-    diameter_count: 0,
-    min_diameter_mm: null,
-    max_diameter_mm: null
+    valid_measurements_by_axis: {
+      horizontal: 0,
+      vertical: 0
+    },
+    diameter_axes: {
+      horizontal: {
+        sum_mm: 0,
+        count: 0,
+        min_mm: null,
+        max_mm: null
+      },
+      vertical: {
+        sum_mm: 0,
+        count: 0,
+        min_mm: null,
+        max_mm: null
+      }
+    }
   }
+}
+
+function getDiameterAxes(target) {
+  return target?.diameter?.diameter_axes || {}
+}
+
+function getAxisDistance(target, axisName) {
+  const axis = getDiameterAxes(target)[axisName] || {}
+  if (axis.distance_mm === null || axis.distance_mm === undefined) return null
+  return Number(axis.distance_mm)
+}
+
+function getAxisStatus(target, axisName) {
+  return (getDiameterAxes(target)[axisName] || {}).status || '-'
 }
 
 export default defineComponent({
@@ -288,7 +328,11 @@ export default defineComponent({
         : '当前预览使用默认单摄设备，适用于水果种类和熟度实时检测。'
     )
     const showDiameterMetrics = computed(
-      () => detectDiameter.value || sessionSummary.value.valid_measurements > 0 || sessionSummary.value.diameter_count > 0
+      () =>
+        detectDiameter.value ||
+        sessionSummary.value.valid_measurements > 0 ||
+        sessionSummary.value.diameter_axes.horizontal.count > 0 ||
+        sessionSummary.value.diameter_axes.vertical.count > 0
     )
 
     const singleCameraIndex = computed(() => registry.value.selection?.single_camera_index ?? 0)
@@ -446,20 +490,19 @@ export default defineComponent({
       })
 
       sessionSummary.value.valid_measurements += summary.valid_measurements || 0
+      sessionSummary.value.valid_measurements_by_axis.horizontal += summary.valid_measurements_by_axis?.horizontal || 0
+      sessionSummary.value.valid_measurements_by_axis.vertical += summary.valid_measurements_by_axis?.vertical || 0
+
       ;(payload.targets || []).forEach((target) => {
-        const distance = target?.diameter?.distance_mm
-        if (distance === null || distance === undefined) return
-        const numericDistance = Number(distance)
-        sessionSummary.value.diameter_sum_mm += numericDistance
-        sessionSummary.value.diameter_count += 1
-        sessionSummary.value.min_diameter_mm =
-          sessionSummary.value.min_diameter_mm === null
-            ? numericDistance
-            : Math.min(sessionSummary.value.min_diameter_mm, numericDistance)
-        sessionSummary.value.max_diameter_mm =
-          sessionSummary.value.max_diameter_mm === null
-            ? numericDistance
-            : Math.max(sessionSummary.value.max_diameter_mm, numericDistance)
+        ;['horizontal', 'vertical'].forEach((axisName) => {
+          const distance = getAxisDistance(target, axisName)
+          if (distance === null) return
+          const axisSummary = sessionSummary.value.diameter_axes[axisName]
+          axisSummary.sum_mm += distance
+          axisSummary.count += 1
+          axisSummary.min_mm = axisSummary.min_mm === null ? distance : Math.min(axisSummary.min_mm, distance)
+          axisSummary.max_mm = axisSummary.max_mm === null ? distance : Math.max(axisSummary.max_mm, distance)
+        })
       })
     }
 
@@ -555,15 +598,16 @@ export default defineComponent({
       ElMessage.success('实时检测已启动')
     }
 
-    const diameterMetric = (type) => {
-      if (!sessionSummary.value.diameter_count) return '-'
+    const diameterMetric = (axisName, type) => {
+      const axisSummary = sessionSummary.value.diameter_axes[axisName] || {}
+      if (!axisSummary.count) return '-'
       if (type === 'avg') {
-        return `${(sessionSummary.value.diameter_sum_mm / sessionSummary.value.diameter_count).toFixed(2)} mm`
+        return `${(axisSummary.sum_mm / axisSummary.count).toFixed(2)} mm`
       }
       if (type === 'min') {
-        return `${Number(sessionSummary.value.min_diameter_mm).toFixed(2)} mm`
+        return `${Number(axisSummary.min_mm).toFixed(2)} mm`
       }
-      return `${Number(sessionSummary.value.max_diameter_mm).toFixed(2)} mm`
+      return `${Number(axisSummary.max_mm).toFixed(2)} mm`
     }
 
     const saveSessionReport = async () => {
@@ -621,10 +665,22 @@ export default defineComponent({
       if (target?.ripeness?.confidence === null || target?.ripeness?.confidence === undefined) return '-'
       return `${(Number(target.ripeness.confidence) * 100).toFixed(1)}%`
     }
-    const targetHasDiameter = (target) => target?.diameter?.distance_mm !== null && target?.diameter?.distance_mm !== undefined
+    const targetHasDiameter = (target) => getAxisDistance(target, 'horizontal') !== null || getAxisDistance(target, 'vertical') !== null
     const targetDiameterText = (target) => {
-      if (targetHasDiameter(target)) return `${Number(target.diameter.distance_mm).toFixed(2)} mm`
-      return target?.diameter?.status || '-'
+      const parts = []
+      const horizontalDistance = getAxisDistance(target, 'horizontal')
+      const verticalDistance = getAxisDistance(target, 'vertical')
+      if (horizontalDistance !== null) {
+        parts.push(`横向 ${horizontalDistance.toFixed(2)} mm`)
+      } else if (getDiameterAxes(target).horizontal) {
+        parts.push(`横向 ${getAxisStatus(target, 'horizontal')}`)
+      }
+      if (verticalDistance !== null) {
+        parts.push(`竖向 ${verticalDistance.toFixed(2)} mm`)
+      } else if (getDiameterAxes(target).vertical) {
+        parts.push(`竖向 ${getAxisStatus(target, 'vertical')}`)
+      }
+      return parts.length ? parts.join(' / ') : target?.diameter?.status || '-'
     }
     const targetTitle = (target) => `${targetSourceLabel(target)} · ${targetFruitLabel(target)}`
 

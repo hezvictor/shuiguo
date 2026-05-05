@@ -211,16 +211,20 @@
 
               <div class="result-meta">
                 <div class="metric-box">
-                  <span>平均果径</span>
-                  <strong>{{ formatDistance(statistics.avg_distance_mm) }}</strong>
+                  <span>横向平均果径</span>
+                  <strong>{{ formatDistance(horizontalStatistics.avg_diameter_mm) }}</strong>
                 </div>
                 <div class="metric-box">
-                  <span>最小果径</span>
-                  <strong>{{ formatDistance(statistics.min_distance_mm) }}</strong>
+                  <span>竖向平均果径</span>
+                  <strong>{{ formatDistance(verticalStatistics.avg_diameter_mm) }}</strong>
                 </div>
                 <div class="metric-box">
-                  <span>最大果径</span>
-                  <strong>{{ formatDistance(statistics.max_distance_mm) }}</strong>
+                  <span>横向有效数</span>
+                  <strong>{{ validMeasurementsByAxis.horizontal || 0 }}</strong>
+                </div>
+                <div class="metric-box">
+                  <span>竖向有效数</span>
+                  <strong>{{ validMeasurementsByAxis.vertical || 0 }}</strong>
                 </div>
               </div>
 
@@ -250,12 +254,26 @@
                     {{ formatBbox(scope.row.bbox) }}
                   </template>
                 </el-table-column>
-                <el-table-column label="果径(mm)" width="120">
+                <el-table-column label="横向果径(mm)" width="130">
                   <template #default="scope">
-                    {{ scope.row.distance_mm !== undefined && scope.row.distance_mm !== null ? scope.row.distance_mm.toFixed(2) : '-' }}
+                    {{ formatDistanceValue(getAxisDistance(scope.row, 'horizontal')) }}
                   </template>
                 </el-table-column>
-                <el-table-column prop="status" label="说明" min-width="180" />
+                <el-table-column label="横向状态" min-width="120">
+                  <template #default="scope">
+                    {{ getAxisStatus(scope.row, 'horizontal') }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="竖向果径(mm)" width="130">
+                  <template #default="scope">
+                    {{ formatDistanceValue(getAxisDistance(scope.row, 'vertical')) }}
+                  </template>
+                </el-table-column>
+                <el-table-column label="竖向状态" min-width="120">
+                  <template #default="scope">
+                    {{ getAxisStatus(scope.row, 'vertical') }}
+                  </template>
+                </el-table-column>
               </el-table>
 
               <div v-if="resultImageUrl" class="result-image-wrap">
@@ -732,6 +750,15 @@ export default {
     },
     statistics() {
       return this.measurementResult?.statistics || {}
+    },
+    horizontalStatistics() {
+      return this.statistics?.horizontal || {}
+    },
+    verticalStatistics() {
+      return this.statistics?.vertical || {}
+    },
+    validMeasurementsByAxis() {
+      return this.measurementResult?.valid_measurements_by_axis || { horizontal: 0, vertical: 0 }
     },
     measurementTargets() {
       return this.measurementResult?.targets || []
@@ -1354,6 +1381,26 @@ export default {
         return '-'
       }
       return `${Number(value).toFixed(2)} mm`
+    },
+    formatDistanceValue(value) {
+      return value === null || value === undefined ? '-' : Number(value).toFixed(2)
+    },
+    getAxis(row, axisName) {
+      return row?.diameter_axes?.[axisName] || null
+    },
+    getAxisDistance(row, axisName) {
+      const axis = this.getAxis(row, axisName)
+      if (!axis || axis.distance_mm === null || axis.distance_mm === undefined) {
+        return null
+      }
+      return Number(axis.distance_mm)
+    },
+    getAxisStatus(row, axisName) {
+      const axis = this.getAxis(row, axisName)
+      if (!axis) {
+        return '-'
+      }
+      return axis.status || 'ok'
     },
     formatBbox(bbox) {
       if (!Array.isArray(bbox) || bbox.length !== 4) {
