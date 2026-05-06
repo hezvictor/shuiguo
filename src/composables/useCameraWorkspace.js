@@ -11,20 +11,44 @@ const state = reactive({
   loading: false,
   registry: {
     selection: {
-      single_camera_index: 0,
-      dual_left_camera_index: 0,
-      dual_right_camera_index: 1,
+      single_camera_index: null,
+      dual_left_camera_index: null,
+      dual_right_camera_index: null,
       preview_camera_indices: []
     },
     last_scan: {
       results: [],
       pair_results: [],
       device_catalog: [],
-      recommended_dual_pair: null
+      recommended_dual_pair: null,
+      updated_at: null
     },
     suggested_intervals: {
       single_interval_ms: 1500,
       dual_interval_ms: 5000
+    },
+    capabilities: {
+      scan_completed: false,
+      readable_camera_count: 0,
+      readable_camera_indices: [],
+      single: {
+        configured: false,
+        available: false,
+        reason_code: 'camera_not_scanned',
+        message: '尚未扫描摄像头，请先到摄像头拍照与配置页扫描并保存默认单摄配置。'
+      },
+      dual: {
+        configured: false,
+        available: false,
+        reason_code: 'camera_not_scanned',
+        message: '尚未扫描摄像头，请先扫描并配置双目摄像头。'
+      },
+      realtime: {
+        classification_available: false,
+        ripeness_available: false,
+        diameter_available: false,
+        hybrid_available: false
+      }
     }
   },
   captures: [],
@@ -35,9 +59,9 @@ const state = reactive({
 function normalizeRegistryPayload(payload = {}) {
   return {
     selection: {
-      single_camera_index: payload.selection?.single_camera_index ?? 0,
-      dual_left_camera_index: payload.selection?.dual_left_camera_index ?? 0,
-      dual_right_camera_index: payload.selection?.dual_right_camera_index ?? 1,
+      single_camera_index: payload.selection?.single_camera_index ?? null,
+      dual_left_camera_index: payload.selection?.dual_left_camera_index ?? null,
+      dual_right_camera_index: payload.selection?.dual_right_camera_index ?? null,
       preview_camera_indices: payload.selection?.preview_camera_indices || [],
       backend: payload.selection?.backend || ''
     },
@@ -54,6 +78,29 @@ function normalizeRegistryPayload(payload = {}) {
     suggested_intervals: {
       single_interval_ms: payload.suggested_intervals?.single_interval_ms || 1500,
       dual_interval_ms: payload.suggested_intervals?.dual_interval_ms || 5000
+    },
+    capabilities: {
+      scan_completed: !!payload.capabilities?.scan_completed,
+      readable_camera_count: payload.capabilities?.readable_camera_count || 0,
+      readable_camera_indices: payload.capabilities?.readable_camera_indices || [],
+      single: {
+        configured: !!payload.capabilities?.single?.configured,
+        available: !!payload.capabilities?.single?.available,
+        reason_code: payload.capabilities?.single?.reason_code || '',
+        message: payload.capabilities?.single?.message || ''
+      },
+      dual: {
+        configured: !!payload.capabilities?.dual?.configured,
+        available: !!payload.capabilities?.dual?.available,
+        reason_code: payload.capabilities?.dual?.reason_code || '',
+        message: payload.capabilities?.dual?.message || ''
+      },
+      realtime: {
+        classification_available: !!payload.capabilities?.realtime?.classification_available,
+        ripeness_available: !!payload.capabilities?.realtime?.ripeness_available,
+        diameter_available: !!payload.capabilities?.realtime?.diameter_available,
+        hybrid_available: !!payload.capabilities?.realtime?.hybrid_available
+      }
     }
   }
 }

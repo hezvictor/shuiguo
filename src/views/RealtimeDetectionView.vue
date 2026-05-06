@@ -27,6 +27,14 @@
         @close="errorMessage = ''"
       />
 
+      <el-alert
+        v-if="workspaceNotice"
+        :title="workspaceNotice"
+        :type="workspaceNoticeType"
+        show-icon
+        :closable="false"
+      />
+
       <section class="workspace-grid">
         <div class="workspace-main">
           <section class="panel-card">
@@ -105,11 +113,13 @@
               <el-form label-position="top">
                 <el-form-item label="检测任务">
                   <div class="task-grid">
-                    <el-checkbox v-model="detectClassification" :disabled="isRunning">水果种类检测</el-checkbox>
-                    <el-checkbox v-model="detectRipeness" :disabled="isRunning || !detectClassification">熟度检测</el-checkbox>
-                    <el-checkbox v-model="detectDiameter" :disabled="isRunning">果径检测</el-checkbox>
+                    <el-checkbox v-model="detectClassification" :disabled="isRunning || !classificationTaskAvailable">水果种类检测</el-checkbox>
+                    <el-checkbox v-model="detectRipeness" :disabled="isRunning || !detectClassification || !ripenessTaskAvailable">熟度检测</el-checkbox>
+                    <el-checkbox v-model="detectDiameter" :disabled="isRunning || !diameterTaskAvailable">果径检测</el-checkbox>
                   </div>
                   <p class="task-hint">当前执行模式：{{ modeText }}</p>
+                  <p v-if="!classificationTaskAvailable" class="task-hint">水果种类/熟度检测：{{ singleCapabilityMessage }}</p>
+                  <p v-if="!diameterTaskAvailable" class="task-hint">果径检测：{{ dualCapabilityMessage }}</p>
                 </el-form-item>
 
                 <el-form-item label="检测间隔 (ms)">
@@ -144,7 +154,7 @@
               <el-button @click="goToCameraConfig">前往摄像头拍照与配置页</el-button>
               <el-button type="primary" :disabled="previewEnabled || !canStartPreview" @click="startPreview">启动摄像头</el-button>
               <el-button type="warning" :disabled="!previewEnabled" @click="stopPreview">停止摄像头</el-button>
-              <el-button type="success" :disabled="isRunning" :loading="runningRequest" @click="startLoop">开始实时检测</el-button>
+              <el-button type="success" :disabled="isRunning || !canStartDetection" :loading="runningRequest" @click="startLoop">开始实时检测</el-button>
               <el-button type="warning" :disabled="!isRunning" @click="stopLoop">停止实时检测</el-button>
               <el-button :disabled="!sessionId || !capturedGroupCount || saving" :loading="saving" @click="saveSessionReport">
                 保存本次会话
@@ -228,13 +238,18 @@
 </template>
 
 <script>
-import { computed, defineComponent, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import { detectRealtimeCurrentFrame, saveRealtimeReport } from '@/api/detection'
 import { useCameraPreviewSocket } from '@/composables/useCameraPreviewSocket'
 import { useCameraWorkspace } from '@/composables/useCameraWorkspace'
 import { translateFruitLabel, translateRipenessLabel } from '@/utils/labelMap'
+import {
+  clearRealtimeDetectionDraft,
+  loadRealtimeDetectionDraft,
+  saveRealtimeDetectionDraft
+} from '@/utils/realtimeDetectionWorkspace'
 
 function createEmptySummary() {
   return {
@@ -302,11 +317,23 @@ export default defineComponent({
     const sessionMode = ref('')
     const sessionId = ref('')
     const capturedGroupCount = ref(0)
+    const restoredDraft = ref(false)
     let loopTimer = null
 
     const registry = computed(() => state.registry)
+    const capabilities = computed(() => registry.value.capabilities || {})
+    const realtimeCapabilities = computed(() => capabilities.value.realtime || {})
     const singleIntervalMs = computed(() => registry.value.suggested_intervals?.single_interval_ms || 2000)
     const dualIntervalMs = computed(() => registry.value.suggested_intervals?.dual_interval_ms || 6000)
+    const classificationTaskAvailable = computed(() => !!realtimeCapabilities.value.classification_available)
+    const ripenessTaskAvailable = computed(() => !!realtimeCapabilities.value.ripeness_available)
+    const diameterTaskAvailable = computed(() => !!realtimeCapabilities.value.diameter_available)
+    const singleCapabilityMessage = computed(
+      () => capabilities.value.single?.message || '尚未配置默认单摄像头，实时检测暂不可用。'
+    )
+    const dualCapabilityMessage = computed(
+      () => capabilities.value.dual?.message || '尚未配置默认双目摄像头，果径实时检测暂不可用。'
+    )
 
     const effectiveMode = computed(() => {
       if (detectDiameter.value && detectClassification.value) return 'hybrid'
@@ -335,19 +362,43 @@ export default defineComponent({
         sessionSummary.value.diameter_axes.vertical.count > 0
     )
 
-    const singleCameraIndex = computed(() => registry.value.selection?.single_camera_index ?? 0)
-    const dualLeftCameraIndex = computed(() => registry.value.selection?.dual_left_camera_index ?? 0)
-    const dualRightCameraIndex = computed(() => registry.value.selection?.dual_right_camera_index ?? 1)
+    const singleCameraIndex = computed(() => registry.value.selection?.single_camera_index ?? null)
+    const dualLeftCameraIndex = computed(() => registry.value.selection?.dual_left_camera_index ?? null)
+    const dualRightCameraIndex = computed(() => registry.value.selection?.dual_right_camera_index ?? null)
 
     const resolveCameraLabel = (cameraIndex) => {
+      if (cameraIndex === null || cameraIndex === undefined) {
+        return '未配置'
+      }
       const matched = (registry.value.last_scan?.results || []).find((item) => item.camera_index === cameraIndex)
       return matched?.device_name ? `${matched.device_name}（索引 ${cameraIndex}）` : `相机 ${cameraIndex}`
     }
 
     const singleCameraLabel = computed(() => resolveCameraLabel(singleCameraIndex.value))
-    const dualPairLabel = computed(() => `${resolveCameraLabel(dualLeftCameraIndex.value)} / ${resolveCameraLabel(dualRightCameraIndex.value)}`)
+    const dualPairLabel = computed(() => {
+      if (dualLeftCameraIndex.value === null && dualRightCameraIndex.value === null) {
+        return '未配置'
+      }
+      if (dualLeftCameraIndex.value === null || dualRightCameraIndex.value === null) {
+        return '请补全左右相机'
+      }
+      return `${resolveCameraLabel(dualLeftCameraIndex.value)} / ${resolveCameraLabel(dualRightCameraIndex.value)}`
+    })
     const activePreviewDeviceLabel = computed(() => (previewMode.value === 'dual' ? dualPairLabel.value : singleCameraLabel.value))
     const lastDetectTime = computed(() => (lastDetectAt.value ? new Date(lastDetectAt.value).toLocaleString('zh-CN') : '暂无'))
+    const workspaceNotice = computed(() => {
+      if (!capabilities.value.scan_completed) {
+        return singleCapabilityMessage.value
+      }
+      if (classificationTaskAvailable.value && !diameterTaskAvailable.value) {
+        return dualCapabilityMessage.value
+      }
+      if (!classificationTaskAvailable.value && !diameterTaskAvailable.value) {
+        return [singleCapabilityMessage.value, dualCapabilityMessage.value].filter(Boolean).join(' ')
+      }
+      return ''
+    })
+    const workspaceNoticeType = computed(() => (classificationTaskAvailable.value || diameterTaskAvailable.value ? 'warning' : 'error'))
 
     const currentTargets = computed(() => currentResultItems.value.flatMap((item) => item.targets || []))
     const fruitStats = computed(() =>
@@ -371,6 +422,25 @@ export default defineComponent({
       return singleIntervalMs.value
     })
 
+    const modeAvailability = computed(() => {
+      if (effectiveMode.value === 'single') {
+        return {
+          available: classificationTaskAvailable.value,
+          message: singleCapabilityMessage.value
+        }
+      }
+      if (effectiveMode.value === 'dual' || effectiveMode.value === 'hybrid') {
+        return {
+          available: diameterTaskAvailable.value,
+          message: dualCapabilityMessage.value
+        }
+      }
+      return {
+        available: false,
+        message: '请至少勾选一种检测任务后再启动实时检测'
+      }
+    })
+
     const previewPayload = computed(() => {
       if (previewMode.value === 'dual') {
         return {
@@ -390,9 +460,12 @@ export default defineComponent({
     })
 
     const canStartPreview = computed(() => {
-      if (previewMode.value === 'dual') return dualLeftCameraIndex.value !== dualRightCameraIndex.value
-      return true
+      if (previewMode.value === 'dual') {
+        return diameterTaskAvailable.value && dualLeftCameraIndex.value !== dualRightCameraIndex.value
+      }
+      return classificationTaskAvailable.value
     })
+    const canStartDetection = computed(() => !!effectiveMode.value && modeAvailability.value.available)
     const previewActive = computed(() => previewEnabled.value && canStartPreview.value)
 
     const {
@@ -404,11 +477,77 @@ export default defineComponent({
       payload: previewPayload
     })
 
+    const draftPersistencePaused = ref(false)
+
     const applySuggestedInterval = () => {
       intervalMs.value = suggestedIntervalMs.value
     }
 
+    const resetSessionDraftState = async () => {
+      draftPersistencePaused.value = true
+      currentResultItems.value = []
+      lastDetectionPayload.value = null
+      lastDetectAt.value = null
+      sessionSummary.value = createEmptySummary()
+      sessionMode.value = ''
+      sessionId.value = ''
+      capturedGroupCount.value = 0
+      restoredDraft.value = false
+      clearRealtimeDetectionDraft()
+      await nextTick()
+      draftPersistencePaused.value = false
+      persistRealtimeDraft()
+    }
+
+    const clearSessionDraftState = async () => {
+      await resetSessionDraftState()
+    }
+
+    const persistRealtimeDraft = () => {
+      saveRealtimeDetectionDraft({
+        intervalMs: intervalMs.value,
+        targetGroupCount: targetGroupCount.value,
+        detectClassification: detectClassification.value,
+        detectRipeness: detectRipeness.value,
+        detectDiameter: detectDiameter.value,
+        currentResultItems: currentResultItems.value,
+        lastDetectionPayload: lastDetectionPayload.value,
+        lastDetectAt: lastDetectAt.value,
+        sessionSummary: sessionSummary.value,
+        sessionMode: sessionMode.value,
+        sessionId: sessionId.value,
+        capturedGroupCount: capturedGroupCount.value
+      })
+    }
+
+    const restoreRealtimeDraft = () => {
+      const draft = loadRealtimeDetectionDraft()
+      if (!draft) return false
+
+      intervalMs.value = Number(draft.intervalMs || intervalMs.value)
+      targetGroupCount.value = Number(draft.targetGroupCount || targetGroupCount.value)
+      detectClassification.value = draft.detectClassification !== false
+      detectRipeness.value = !!draft.detectRipeness
+      detectDiameter.value = !!draft.detectDiameter
+      currentResultItems.value = Array.isArray(draft.currentResultItems) ? draft.currentResultItems : []
+      lastDetectionPayload.value = draft.lastDetectionPayload || null
+      lastDetectAt.value = draft.lastDetectAt || null
+      sessionSummary.value = draft.sessionSummary || createEmptySummary()
+      sessionMode.value = draft.sessionMode || ''
+      sessionId.value = draft.sessionId || ''
+      capturedGroupCount.value = Number(draft.capturedGroupCount || 0)
+      restoredDraft.value = true
+      return true
+    }
+
     const normalizeTaskSelection = () => {
+      if (!classificationTaskAvailable.value) {
+        detectClassification.value = false
+        detectRipeness.value = false
+      }
+      if (!diameterTaskAvailable.value) {
+        detectDiameter.value = false
+      }
       if (detectRipeness.value && !detectClassification.value) {
         detectClassification.value = true
       }
@@ -431,7 +570,7 @@ export default defineComponent({
 
     const startPreview = () => {
       if (!canStartPreview.value) {
-        errorMessage.value = '当前预览所需的摄像头配置无效，请先检查双摄左右相机是否重复。'
+        errorMessage.value = modeAvailability.value.message
         return
       }
       previewEnabled.value = true
@@ -450,7 +589,14 @@ export default defineComponent({
     const loadWorkspace = async () => {
       try {
         await loadRegistry()
-        applySuggestedInterval()
+        const hasDraft = restoreRealtimeDraft()
+        if (!hasDraft) {
+          applySuggestedInterval()
+        }
+        normalizeTaskSelection()
+        if (restoredDraft.value) {
+          ElMessage.info('已恢复未保存的实时检测会话，可继续查看结果或直接保存到历史记录。')
+        }
       } catch (error) {
         errorMessage.value = error?.response?.data?.error || error.message || '读取摄像头配置失败'
       }
@@ -461,7 +607,10 @@ export default defineComponent({
       errorMessage.value = ''
       try {
         await scanRegistry({ max_index: 8 })
-        applySuggestedInterval()
+        if (!sessionId.value && !capturedGroupCount.value) {
+          applySuggestedInterval()
+        }
+        normalizeTaskSelection()
         ElMessage.success('设备列表已刷新并同步到全局配置')
       } catch (error) {
         errorMessage.value = error?.response?.data?.error || error.message || '刷新设备失败'
@@ -565,20 +714,16 @@ export default defineComponent({
         errorMessage.value = '请至少勾选一种检测任务后再启动实时检测'
         return
       }
-      if (!canStartPreview.value) {
-        errorMessage.value = '当前模式对应的摄像头配置无效，请先到摄像头配置页修正默认设备'
+      if (!modeAvailability.value.available) {
+        errorMessage.value = modeAvailability.value.message
         return
       }
       if (!previewEnabled.value) {
         previewEnabled.value = true
       }
 
+      await resetSessionDraftState()
       sessionMode.value = effectiveMode.value
-      sessionSummary.value = createEmptySummary()
-      currentResultItems.value = []
-      lastDetectionPayload.value = null
-      sessionId.value = ''
-      capturedGroupCount.value = 0
       isRunning.value = true
 
       const ok = await runDetectionOnce()
@@ -633,8 +778,7 @@ export default defineComponent({
             dual_right_camera_index: dualRightCameraIndex.value
           }
         })
-        sessionId.value = ''
-        capturedGroupCount.value = 0
+        await clearSessionDraftState()
         ElMessage.success('本次实时检测会话已保存到历史记录')
       } catch (error) {
         errorMessage.value = error?.response?.data?.error || error.message || '保存会话失败'
@@ -699,8 +843,28 @@ export default defineComponent({
 
     watch(
       () => detectClassification.value,
-      () => {
+      (value, previousValue) => {
+        if (value && !classificationTaskAvailable.value) {
+          detectClassification.value = false
+          if (!isRunning.value && previousValue !== value) {
+            ElMessage.warning(singleCapabilityMessage.value)
+          }
+          return
+        }
         normalizeTaskSelection()
+      }
+    )
+
+    watch(
+      () => detectDiameter.value,
+      (value, previousValue) => {
+        if (value && !diameterTaskAvailable.value) {
+          detectDiameter.value = false
+          if (!isRunning.value && previousValue !== value) {
+            ElMessage.warning(dualCapabilityMessage.value)
+          }
+          return
+        }
       }
     )
 
@@ -720,6 +884,36 @@ export default defineComponent({
       }
     )
 
+    watch(
+      () => [classificationTaskAvailable.value, diameterTaskAvailable.value],
+      () => {
+        normalizeTaskSelection()
+      },
+      { immediate: true }
+    )
+
+    watch(
+      () => [
+        intervalMs.value,
+        targetGroupCount.value,
+        detectClassification.value,
+        detectRipeness.value,
+        detectDiameter.value,
+        currentResultItems.value,
+        lastDetectionPayload.value,
+        lastDetectAt.value,
+        sessionSummary.value,
+        sessionMode.value,
+        sessionId.value,
+        capturedGroupCount.value
+      ],
+      () => {
+        if (draftPersistencePaused.value) return
+        persistRealtimeDraft()
+      },
+      { deep: true }
+    )
+
     onMounted(() => {
       loadWorkspace()
     })
@@ -731,15 +925,19 @@ export default defineComponent({
     return {
       activePreviewDeviceLabel,
       applySuggestedInterval,
+      canStartDetection,
       canStartPreview,
       capturedGroupCount,
+      classificationTaskAvailable,
       currentResultItems,
       currentTargets,
       detectClassification,
       detectDiameter,
       detectRipeness,
       diameterMetric,
+      diameterTaskAvailable,
       dualPairLabel,
+      dualCapabilityMessage,
       errorMessage,
       formatBbox,
       fruitStats,
@@ -755,6 +953,7 @@ export default defineComponent({
       previewErrorMessage,
       previewImageUrl,
       refreshDevices,
+      ripenessTaskAvailable,
       ripenessStats,
       runningRequest,
       saveSessionReport,
@@ -764,6 +963,7 @@ export default defineComponent({
       sessionSummary,
       showDiameterMetrics,
       singleCameraLabel,
+      singleCapabilityMessage,
       startLoop,
       startPreview,
       statWidth,
@@ -778,7 +978,9 @@ export default defineComponent({
       targetRipenessConfidence,
       targetRipenessLabel,
       targetSourceLabel,
-      targetTitle
+      targetTitle,
+      workspaceNotice,
+      workspaceNoticeType
     }
   }
 })

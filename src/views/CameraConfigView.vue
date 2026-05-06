@@ -26,6 +26,14 @@
         @close="errorMessage = ''"
       />
 
+      <el-alert
+        v-if="configurationNotice"
+        :title="configurationNotice"
+        type="warning"
+        show-icon
+        :closable="false"
+      />
+
       <section class="summary-grid">
         <article class="summary-card">
           <span class="summary-label">已扫描设备</span>
@@ -35,7 +43,7 @@
 
         <article class="summary-card">
           <span class="summary-label">默认单摄</span>
-          <strong class="summary-value">{{ cameraLabel(localSelection.single_camera_index) }}</strong>
+          <strong class="summary-value">{{ cameraLabel(localSelection.single_camera_index, '未配置') }}</strong>
           <p>用于单摄识别与成熟度检测。</p>
         </article>
 
@@ -92,7 +100,7 @@
             <div class="form-grid">
               <el-form label-position="top">
                 <el-form-item label="默认单摄">
-                  <el-select v-model="localSelection.single_camera_index" filterable placeholder="请选择单摄">
+                  <el-select v-model="localSelection.single_camera_index" clearable filterable placeholder="请选择单摄">
                     <el-option
                       v-for="camera in availableCameraOptions"
                       :key="`single-${camera.camera_index}`"
@@ -103,7 +111,7 @@
                 </el-form-item>
 
                 <el-form-item label="双摄左相机">
-                  <el-select v-model="localSelection.dual_left_camera_index" filterable placeholder="请选择左相机">
+                  <el-select v-model="localSelection.dual_left_camera_index" clearable filterable placeholder="请选择左相机">
                     <el-option
                       v-for="camera in availableCameraOptions"
                       :key="`left-${camera.camera_index}`"
@@ -114,7 +122,7 @@
                 </el-form-item>
 
                 <el-form-item label="双摄右相机">
-                  <el-select v-model="localSelection.dual_right_camera_index" filterable placeholder="请选择右相机">
+                  <el-select v-model="localSelection.dual_right_camera_index" clearable filterable placeholder="请选择右相机">
                     <el-option
                       v-for="camera in availableCameraOptions"
                       :key="`right-${camera.camera_index}`"
@@ -316,9 +324,9 @@ export default defineComponent({
     const { state, loadCaptures, loadRegistry, loadRuntimeStatus, saveSelection, scanRegistry } = useCameraWorkspace()
 
     const localSelection = reactive({
-      single_camera_index: 0,
-      dual_left_camera_index: 0,
-      dual_right_camera_index: 1,
+      single_camera_index: null,
+      dual_left_camera_index: null,
+      dual_right_camera_index: null,
       preview_camera_indices: []
     })
 
@@ -340,6 +348,7 @@ export default defineComponent({
     )
 
     const registry = computed(() => state.registry)
+    const capabilities = computed(() => registry.value.capabilities || {})
     const captureRecords = computed(() => state.captures || [])
     const availableCameraOptions = computed(() =>
       (registry.value.last_scan?.results || [])
@@ -355,6 +364,12 @@ export default defineComponent({
       return count === 1 || count === 2
     })
     const dualPairLabel = computed(() => {
+      if (localSelection.dual_left_camera_index === null && localSelection.dual_right_camera_index === null) {
+        return '未配置'
+      }
+      if (localSelection.dual_left_camera_index === null || localSelection.dual_right_camera_index === null) {
+        return '请补全左右相机'
+      }
       if (localSelection.dual_left_camera_index === localSelection.dual_right_camera_index) {
         return '请重新选择左右相机'
       }
@@ -367,16 +382,34 @@ export default defineComponent({
     })
 
     const patchLocalSelection = () => {
-      localSelection.single_camera_index = registry.value.selection?.single_camera_index ?? 0
-      localSelection.dual_left_camera_index = registry.value.selection?.dual_left_camera_index ?? 0
-      localSelection.dual_right_camera_index = registry.value.selection?.dual_right_camera_index ?? 1
+      localSelection.single_camera_index = registry.value.selection?.single_camera_index ?? null
+      localSelection.dual_left_camera_index = registry.value.selection?.dual_left_camera_index ?? null
+      localSelection.dual_right_camera_index = registry.value.selection?.dual_right_camera_index ?? null
       localSelection.preview_camera_indices = [...(registry.value.selection?.preview_camera_indices || [])]
     }
 
-    const cameraLabel = (cameraIndex) => {
+    const cameraLabel = (cameraIndex, emptyText = '相机未配置') => {
+      if (cameraIndex === null || cameraIndex === undefined) {
+        return emptyText
+      }
       const current = availableCameraOptions.value.find((item) => item.camera_index === cameraIndex)
       return current?.optionLabel || `相机 ${cameraIndex}`
     }
+
+    const configurationNotice = computed(() => {
+      const singleMessage = capabilities.value.single?.message || ''
+      const dualMessage = capabilities.value.dual?.message || ''
+      if (!capabilities.value.scan_completed) {
+        return singleMessage || '尚未扫描摄像头，请先扫描并保存默认配置。'
+      }
+      if (capabilities.value.readable_camera_count === 1) {
+        return dualMessage || '当前仅检测到 1 台可用摄像头，双目果径测量暂不可用。'
+      }
+      if (!capabilities.value.single?.configured || !capabilities.value.dual?.configured) {
+        return [singleMessage, dualMessage].filter(Boolean).join(' ')
+      }
+      return ''
+    })
 
     const recordTypeLabel = (record) => {
       if (record.capture_mode === 'bundle') return '照片压缩包'
@@ -424,7 +457,13 @@ export default defineComponent({
     }
 
     const saveCurrentSelection = async () => {
-      if (localSelection.dual_left_camera_index === localSelection.dual_right_camera_index) {
+      const hasLeft = localSelection.dual_left_camera_index !== null && localSelection.dual_left_camera_index !== undefined
+      const hasRight = localSelection.dual_right_camera_index !== null && localSelection.dual_right_camera_index !== undefined
+      if (hasLeft !== hasRight) {
+        errorMessage.value = '双摄左相机和右相机需要同时为空或同时选择'
+        return
+      }
+      if (hasLeft && localSelection.dual_left_camera_index === localSelection.dual_right_camera_index) {
         errorMessage.value = '双摄左相机和右相机不能相同'
         return
       }
@@ -477,6 +516,12 @@ export default defineComponent({
 
       const leftIndex = localSelection.dual_left_camera_index
       const rightIndex = localSelection.dual_right_camera_index
+      if (leftIndex === null || rightIndex === null) {
+        return {
+          selected,
+          payload: null
+        }
+      }
       return {
         selected,
         payload: {
@@ -497,6 +542,10 @@ export default defineComponent({
       }
       if (selected.length > 2) {
         errorMessage.value = '拍照仅支持单摄或双摄，请将预览设备控制在 1 到 2 个'
+        return
+      }
+      if (selected.length === 2 && !payload) {
+        errorMessage.value = '双目拍照前请先完成左右相机配置'
         return
       }
       if (
@@ -636,6 +685,7 @@ export default defineComponent({
       deletePendingCaptureGroup,
       downloadSelectedZip,
       deleteCaptureRecord,
+      configurationNotice,
       dualPairLabel,
       errorMessage,
       formatDateTime,
