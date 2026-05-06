@@ -7,7 +7,7 @@
           <h1>实时检测</h1>
           <p class="hero-text">
             实时检测会复用摄像头拍照与配置页保存的默认设备方案，按固定时间间隔从摄像头采样，并将采样结果沿用图片检测同一套批处理和
-            Excel 报告链路。双目与混合模式默认要求左侧摄像机采集彩图、右侧摄像机采集黑白图，YOLO 始终优先对左侧彩图原图执行框选。
+            Excel 报告链路。双目与混合模式下，实时页面只展示左相机预览画面；右侧黑白相机仍会在后台继续参与果径检测，不影响现有测量流程。
           </p>
         </div>
 
@@ -144,7 +144,7 @@
                     <p>预览连接：{{ previewConnected ? 'WebSocket 已连接' : 'WebSocket 未连接' }}</p>
                     <p>当前会话：{{ sessionId || '未建立' }}</p>
                   </div>
-                  <p class="task-hint">双目/混合模式下默认使用左侧彩图做 YOLO，右侧黑白图参与果径测量。</p>
+                  <p class="task-hint">双目/混合模式下前端只显示左相机画面，右相机仍在后台参与果径测量，不影响现有检测流程。</p>
                 </el-form-item>
               </el-form>
             </div>
@@ -159,6 +159,7 @@
               <el-button :disabled="!sessionId || !capturedGroupCount || saving" :loading="saving" @click="saveSessionReport">
                 保存本次会话
               </el-button>
+              <el-button :disabled="isRunning || saving || !hasDraftContent" @click="clearDraftManually">清空草稿</el-button>
             </div>
           </section>
 
@@ -293,6 +294,66 @@ function getAxisStatus(target, axisName) {
   return (getDiameterAxes(target)[axisName] || {}).status || '-'
 }
 
+function cropDualPreviewToLeftBlob(blob) {
+  return new Promise((resolve, reject) => {
+    const image = new Image()
+    const objectUrl = URL.createObjectURL(blob)
+
+    const cleanup = () => {
+      URL.revokeObjectURL(objectUrl)
+    }
+
+    image.onload = () => {
+      try {
+        const sourceWidth = Number(image.naturalWidth || 0)
+        const sourceHeight = Number(image.naturalHeight || 0)
+        if (sourceWidth < 2 || sourceHeight < 1) {
+          cleanup()
+          resolve(blob)
+          return
+        }
+
+        const targetWidth = Math.max(1, Math.floor(sourceWidth / 2))
+        const canvas = document.createElement('canvas')
+        canvas.width = targetWidth
+        canvas.height = sourceHeight
+
+        const context = canvas.getContext('2d')
+        if (!context) {
+          cleanup()
+          resolve(blob)
+          return
+        }
+
+        context.drawImage(image, 0, 0, targetWidth, sourceHeight, 0, 0, targetWidth, sourceHeight)
+        canvas.toBlob(
+          (croppedBlob) => {
+            cleanup()
+            resolve(croppedBlob || blob)
+          },
+          'image/jpeg',
+          0.9
+        )
+      } catch (error) {
+        cleanup()
+        reject(error)
+      }
+    }
+
+    image.onerror = () => {
+      cleanup()
+      reject(new Error('failed to crop dual preview frame'))
+    }
+
+    image.src = objectUrl
+  })
+}
+
+function isTimeoutError(error) {
+  const message = String(error?.message || '')
+  return error?.code === 'ECONNABORTED' || /timeout/i.test(message)
+}
+
 export default defineComponent({
   name: 'RealtimeDetectionView',
   setup() {
@@ -349,9 +410,10 @@ export default defineComponent({
       if (effectiveMode.value === 'hybrid') return detectRipeness.value ? '混合模式（种类 + 熟度 + 果径）' : '混合模式（种类 + 果径）'
       return '未选择检测任务'
     })
+    const previewShowsLeftCameraOnly = computed(() => previewMode.value === 'dual')
     const previewDescription = computed(() =>
-      previewMode.value === 'dual'
-        ? '当前预览使用默认双摄设备，适用于果径检测和混合模式。'
+      previewShowsLeftCameraOnly.value
+        ? '当前预览已切换为默认双摄中的左相机画面；右相机会继续在后台参与果径检测与测量。'
         : '当前预览使用默认单摄设备，适用于水果种类和熟度实时检测。'
     )
     const showDiameterMetrics = computed(
@@ -401,6 +463,14 @@ export default defineComponent({
     const workspaceNoticeType = computed(() => (classificationTaskAvailable.value || diameterTaskAvailable.value ? 'warning' : 'error'))
 
     const currentTargets = computed(() => currentResultItems.value.flatMap((item) => item.targets || []))
+    const hasDraftContent = computed(
+      () =>
+        !!sessionId.value ||
+        capturedGroupCount.value > 0 ||
+        !!lastDetectionPayload.value ||
+        currentResultItems.value.length > 0 ||
+        Number(sessionSummary.value.total_targets || 0) > 0
+    )
     const fruitStats = computed(() =>
       Object.entries(sessionSummary.value.fruit_counts || {})
         .map(([fruit, count]) => ({ fruit, count }))
@@ -474,7 +544,13 @@ export default defineComponent({
       imageUrl: previewImageUrl
     } = useCameraPreviewSocket({
       active: previewActive,
-      payload: previewPayload
+      payload: previewPayload,
+      transformFrameBlob: async (blob) => {
+        if (!previewShowsLeftCameraOnly.value) {
+          return blob
+        }
+        return cropDualPreviewToLeftBlob(blob)
+      }
     })
 
     const draftPersistencePaused = ref(false)
@@ -501,6 +577,12 @@ export default defineComponent({
 
     const clearSessionDraftState = async () => {
       await resetSessionDraftState()
+    }
+
+    const clearDraftManually = async () => {
+      errorMessage.value = ''
+      await clearSessionDraftState()
+      ElMessage.success('实时检测草稿已清空')
     }
 
     const persistRealtimeDraft = () => {
@@ -781,7 +863,11 @@ export default defineComponent({
         await clearSessionDraftState()
         ElMessage.success('本次实时检测会话已保存到历史记录')
       } catch (error) {
-        errorMessage.value = error?.response?.data?.error || error.message || '保存会话失败'
+        if (isTimeoutError(error)) {
+          errorMessage.value = '保存实时会话超时。后台仍可能在继续生成报告，请稍后到历史记录页确认；如果只想重置当前页面，可直接点击“清空草稿”。'
+        } else {
+          errorMessage.value = error?.response?.data?.error || error.message || '保存会话失败'
+        }
       } finally {
         saving.value = false
       }
@@ -929,6 +1015,7 @@ export default defineComponent({
       canStartPreview,
       capturedGroupCount,
       classificationTaskAvailable,
+      clearDraftManually,
       currentResultItems,
       currentTargets,
       detectClassification,
@@ -942,6 +1029,7 @@ export default defineComponent({
       formatBbox,
       fruitStats,
       goToCameraConfig,
+      hasDraftContent,
       intervalMs,
       isRunning,
       lastDetectTime,

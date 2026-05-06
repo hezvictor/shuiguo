@@ -9,6 +9,7 @@ export function useCameraPreviewSocket(options = {}) {
   const active = options.active
   const payload = options.payload
   const includeFrameDataUrl = options.includeFrameDataUrl === true
+  const transformFrameBlob = options.transformFrameBlob
   const onStatus = options.onStatus || (() => {})
   const onReady = options.onReady || (() => {})
   const onError = options.onError || (() => {})
@@ -23,6 +24,7 @@ export function useCameraPreviewSocket(options = {}) {
   let reconnectTimer = null
   let manualClose = false
   let latestFrameBlob = null
+  let frameVersion = 0
 
   const isActive = computed(() => (typeof active === 'function' ? !!active() : !!active?.value))
   const previewPayload = computed(() => {
@@ -95,7 +97,24 @@ export function useCameraPreviewSocket(options = {}) {
     })
 
   const updateImage = async (data) => {
-    const nextBlob = data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' })
+    const currentVersion = ++frameVersion
+    let nextBlob = data instanceof Blob ? data : new Blob([data], { type: 'image/jpeg' })
+    if (typeof transformFrameBlob === 'function') {
+      try {
+        const transformedBlob = await transformFrameBlob(nextBlob, {
+          payload: previewPayload.value,
+          status: status.value
+        })
+        if (transformedBlob instanceof Blob) {
+          nextBlob = transformedBlob
+        }
+      } catch (error) {
+        console.warn('preview frame transform failed', error)
+      }
+    }
+    if (currentVersion !== frameVersion) {
+      return
+    }
     const nextUrl = URL.createObjectURL(nextBlob)
     revokeImageUrl()
     imageUrl.value = nextUrl

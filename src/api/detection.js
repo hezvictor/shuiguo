@@ -71,7 +71,7 @@ export function saveRealtimeReport(data) {
     url: '/api/realtime/save_report/',
     method: 'post',
     data,
-    timeout: 10000
+    timeout: 600000
   })
 }
 
