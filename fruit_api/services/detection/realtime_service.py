@@ -112,7 +112,12 @@ def _save_realtime_session_report(user, data: Dict) -> Dict:
         raise RealtimePayloadError("缺少实时会话 session_id")
 
     session_service = get_realtime_session_service()
-    batch_inputs = session_service.build_batch_inputs(user_id=user.id, session_id=session_id)
+    try:
+        batch_inputs = session_service.build_batch_inputs(user_id=user.id, session_id=session_id)
+    except ValueError as exc:
+        raise RealtimePayloadError("当前实时会话已保存或已失效，请重新开始实时检测。") from exc
+    except FileNotFoundError as exc:
+        raise RealtimePayloadError("当前实时会话采样文件缺失，无法再次生成报告。") from exc
     sample_count = batch_inputs["sample_count"]
     if sample_count <= 0:
         raise RealtimePayloadError("当前实时会话没有可生成报告的采样图片")

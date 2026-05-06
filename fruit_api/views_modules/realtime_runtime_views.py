@@ -4,7 +4,9 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from fruit_api.exceptions import AppError
 from fruit_api.serializers import RealtimeCurrentFrameDetectSerializer
+from fruit_api.services.camera.registry_service import get_camera_registry_service
 from fruit_api.services.detection.realtime_pipeline_service import (
     run_dual_camera_realtime_detection,
     run_hybrid_camera_realtime_detection,
@@ -12,7 +14,7 @@ from fruit_api.services.detection.realtime_pipeline_service import (
     run_single_preview_frame_realtime_detection,
 )
 from fruit_api.services.detection.realtime_session_service import get_realtime_session_service
-from fruit_api.views_modules.response_utils import serializer_error_response
+from fruit_api.views_modules.response_utils import error_response, serializer_error_response
 
 
 @api_view(["POST"])
@@ -26,6 +28,17 @@ def realtime_detect_current_frame(request):
     app_config.ensure_models_loaded()
     data = serializer.validated_data
     mode = data["mode"]
+    registry_service = get_camera_registry_service()
+
+    try:
+        registry_service.validate_realtime_mode(
+            mode=mode,
+            camera_index=data.get("camera_index"),
+            left_camera_index=data.get("left_camera_index"),
+            right_camera_index=data.get("right_camera_index"),
+        )
+    except AppError as exc:
+        return error_response(exc, http_status=exc.status_code)
 
     if mode == "single":
         if data.get("frame_data_url"):

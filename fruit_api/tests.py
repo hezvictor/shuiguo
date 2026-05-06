@@ -24,7 +24,7 @@ from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 
 from fruit_api.exception_handler import api_exception_handler
-from fruit_api.exceptions import AppNotFoundError, FileLifecycleError
+from fruit_api.exceptions import AppError, AppNotFoundError, FileLifecycleError
 from fruit_api.models import DetectionHistory
 from fruit_api.services.storage import collect_media_cleanup_targets, delete_media_file, ensure_media_path
 from fruit_api.services.detection.detect_service import InvalidParamError, classify_ripeness_by_type, parse_selected_indices
@@ -35,10 +35,12 @@ from rest_framework.exceptions import ValidationError
 
 
 class ErrorPayloadAssertMixin:
-    def assert_error_payload(self, response):
+    def assert_error_payload(self, response, code=None):
         self.assertIn('status', response.data)
         self.assertEqual(response.data['status'], 'error')
         self.assertIn('error', response.data)
+        if code is not None:
+            self.assertEqual(response.data.get('code'), code)
 
 
 class WebsocketAuthTests(SimpleTestCase):
@@ -1222,6 +1224,65 @@ class RealtimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         finally:
             shutil.rmtree(media_root, ignore_errors=True)
 
+    @patch('fruit_api.services.detection.image_batch_service.yolo_targets')
+    def test_save_realtime_report_from_session_cannot_repeat_same_session(
+        self,
+        mock_yolo_targets,
+    ):
+        media_root = os.path.join(settings.BASE_DIR, 'test_media', 'realtime_report_repeat_session')
+        shutil.rmtree(media_root, ignore_errors=True)
+        os.makedirs(media_root, exist_ok=True)
+        try:
+            mock_yolo_targets.return_value = [
+                {'bbox': [1, 1, 6, 6], 'label': 'Banana', 'confidence': 0.91},
+            ]
+
+            from fruit_api.services.detection.realtime_session_service import get_realtime_session_service
+
+            image_buffer = io.BytesIO()
+            Image.new('RGB', (12, 12), color=(40, 80, 120)).save(image_buffer, format='JPEG')
+
+            with override_settings(MEDIA_ROOT=media_root):
+                session_service = get_realtime_session_service()
+                session_info = session_service.record_sample(
+                    user_id=self.user.id,
+                    session_id=None,
+                    mode='single',
+                    target_group_count=1,
+                    sample_payload={'mode': 'single', 'image_bytes': image_buffer.getvalue()},
+                    metadata={'interval_ms': 2000, 'detect_ripeness': False},
+                )
+
+                first_resp = self.client.post(
+                    '/api/realtime/save_report/',
+                    {
+                        'session_id': session_info['session_id'],
+                        'mode': 'single',
+                        'interval_ms': 2000,
+                    },
+                    format='json',
+                )
+                self.assertEqual(first_resp.status_code, status.HTTP_201_CREATED)
+
+                second_resp = self.client.post(
+                    '/api/realtime/save_report/',
+                    {
+                        'session_id': session_info['session_id'],
+                        'mode': 'single',
+                        'interval_ms': 2000,
+                    },
+                    format='json',
+                )
+
+                self.assertEqual(second_resp.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assert_error_payload(second_resp)
+                self.assertEqual(
+                    DetectionHistory.objects.filter(user=self.user, detection_type='realtime').count(),
+                    1,
+                )
+        finally:
+            shutil.rmtree(media_root, ignore_errors=True)
+
 
 class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
     def setUp(self):
@@ -1419,15 +1480,28 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
     @patch('fruit_api.views_modules.camera_registry_views.get_camera_registry_service')
     def test_camera_registry_get_success(self, mock_get_registry_service):
         mock_get_registry_service.return_value.snapshot.return_value = {
-            'selection': {'single_camera_index': 0},
+            'selection': {'single_camera_index': None},
             'last_scan': {'results': []},
             'suggested_intervals': {'single_interval_ms': 1500, 'dual_interval_ms': 5000},
+            'capabilities': {
+                'scan_completed': False,
+                'readable_camera_count': 0,
+                'single': {'configured': False, 'available': False, 'reason_code': 'camera_not_scanned', 'message': 'msg'},
+                'dual': {'configured': False, 'available': False, 'reason_code': 'camera_not_scanned', 'message': 'msg'},
+                'realtime': {
+                    'classification_available': False,
+                    'ripeness_available': False,
+                    'diameter_available': False,
+                    'hybrid_available': False,
+                },
+            },
         }
 
         resp = self.client.get('/api/camera/registry/')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data['selection']['single_camera_index'], 0)
+        self.assertIsNone(resp.data['selection']['single_camera_index'])
+        self.assertFalse(resp.data['capabilities']['realtime']['classification_available'])
 
     @patch('fruit_api.views_modules.camera_registry_views.get_camera_registry_service')
     @patch('fruit_api.views_modules.camera_registry_views.probe_camera_indices')
@@ -1442,15 +1516,28 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
             'recommended_dual_pair': None,
         }
         mock_get_registry_service.return_value.update_scan.return_value = {
-            'selection': {'single_camera_index': 0},
+            'selection': {'single_camera_index': None, 'dual_left_camera_index': None, 'dual_right_camera_index': None},
             'last_scan': {'results': [{'camera_index': 0, 'opened': True}]},
             'suggested_intervals': {'single_interval_ms': 1500, 'dual_interval_ms': 5000},
+            'capabilities': {
+                'scan_completed': True,
+                'readable_camera_count': 1,
+                'single': {'configured': False, 'available': False, 'reason_code': 'single_camera_not_configured', 'message': 'msg'},
+                'dual': {'configured': False, 'available': False, 'reason_code': 'dual_camera_requires_two_devices', 'message': 'msg'},
+                'realtime': {
+                    'classification_available': False,
+                    'ripeness_available': False,
+                    'diameter_available': False,
+                    'hybrid_available': False,
+                },
+            },
         }
 
         resp = self.client.post('/api/camera/registry/scan/', {'max_index': 8}, format='json')
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
-        self.assertEqual(resp.data['selection']['single_camera_index'], 0)
+        self.assertIsNone(resp.data['selection']['single_camera_index'])
+        self.assertEqual(resp.data['capabilities']['readable_camera_count'], 1)
         mock_probe_camera_indices.assert_called_once()
 
     @patch('fruit_api.views_modules.camera_registry_views.get_camera_registry_service')
@@ -1464,6 +1551,18 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
             },
             'last_scan': {'results': []},
             'suggested_intervals': {'single_interval_ms': 1500, 'dual_interval_ms': 5000},
+            'capabilities': {
+                'scan_completed': True,
+                'readable_camera_count': 2,
+                'single': {'configured': True, 'available': True, 'reason_code': None, 'message': 'msg'},
+                'dual': {'configured': True, 'available': True, 'reason_code': None, 'message': 'msg'},
+                'realtime': {
+                    'classification_available': True,
+                    'ripeness_available': True,
+                    'diameter_available': True,
+                    'hybrid_available': True,
+                },
+            },
         }
 
         resp = self.client.post(
@@ -1479,6 +1578,20 @@ class CameraApiTests(ErrorPayloadAssertMixin, APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.assertEqual(resp.data['selection']['preview_camera_indices'], [1, 2])
+
+    def test_camera_registry_select_accepts_null_for_clearing_configuration(self):
+        resp = self.client.post(
+            '/api/camera/registry/select/',
+            {
+                'single_camera_index': None,
+                'dual_left_camera_index': None,
+                'dual_right_camera_index': None,
+                'preview_camera_indices': [],
+            },
+            format='json',
+        )
+
+        self.assertNotEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
 
     @patch('fruit_api.views_modules.camera_capture_views.get_camera_capture_service')
     def test_camera_capture_success(self, mock_get_capture_service):
@@ -1586,13 +1699,21 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.user = User.objects.create_user(username='realtime_rt_user', password='pass1234')
         self.client.force_authenticate(user=self.user)
 
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.run_single_camera_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.get_realtime_session_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
-    def test_realtime_detect_current_frame_single_success(self, mock_get_app_config, mock_get_session_service, mock_run_single):
+    def test_realtime_detect_current_frame_single_success(
+        self,
+        mock_get_app_config,
+        mock_get_session_service,
+        mock_run_single,
+        mock_get_camera_registry_service,
+    ):
         mock_app_cfg = Mock()
         mock_app_cfg.ensure_models_loaded = Mock()
         mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.return_value = {'camera_index': 0}
         mock_get_session_service.return_value.record_sample.return_value = {
             'session_id': 'session-a',
             'captured_group_count': 1,
@@ -1618,6 +1739,7 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertNotIn('_session_sample', resp.data)
         mock_run_single.assert_called_once()
 
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.run_single_preview_frame_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.run_single_camera_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
@@ -1626,10 +1748,12 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         mock_get_app_config,
         mock_run_single,
         mock_run_single_preview,
+        mock_get_camera_registry_service,
     ):
         mock_app_cfg = Mock()
         mock_app_cfg.ensure_models_loaded = Mock()
         mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.return_value = {'camera_index': 2}
         mock_run_single_preview.return_value = {
             'status': 'success',
             'mode': 'single',
@@ -1656,12 +1780,17 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         mock_run_single_preview.assert_called_once()
         mock_run_single.assert_not_called()
 
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.run_dual_camera_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
-    def test_realtime_detect_current_frame_dual_success(self, mock_get_app_config, mock_run_dual):
+    def test_realtime_detect_current_frame_dual_success(self, mock_get_app_config, mock_run_dual, mock_get_camera_registry_service):
         mock_app_cfg = Mock()
         mock_app_cfg.ensure_models_loaded = Mock()
         mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.return_value = {
+            'left_camera_index': 1,
+            'right_camera_index': 2,
+        }
         mock_run_dual.return_value = {
             'status': 'success',
             'mode': 'dual',
@@ -1679,12 +1808,17 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.data['mode'], 'dual')
         mock_run_dual.assert_called_once()
 
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.run_hybrid_camera_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
-    def test_realtime_detect_current_frame_hybrid_success(self, mock_get_app_config, mock_run_hybrid):
+    def test_realtime_detect_current_frame_hybrid_success(self, mock_get_app_config, mock_run_hybrid, mock_get_camera_registry_service):
         mock_app_cfg = Mock()
         mock_app_cfg.ensure_models_loaded = Mock()
         mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.return_value = {
+            'left_camera_index': 1,
+            'right_camera_index': 2,
+        }
         mock_run_hybrid.return_value = {
             'status': 'success',
             'mode': 'hybrid',
@@ -1746,12 +1880,22 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
         self.assert_error_payload(resp)
 
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
     @patch('fruit_api.views_modules.realtime_runtime_views.run_dual_camera_realtime_detection')
     @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
-    def test_realtime_detect_current_frame_dual_forces_diameter(self, mock_get_app_config, mock_run_dual):
+    def test_realtime_detect_current_frame_dual_forces_diameter(
+        self,
+        mock_get_app_config,
+        mock_run_dual,
+        mock_get_camera_registry_service,
+    ):
         mock_app_cfg = Mock()
         mock_app_cfg.ensure_models_loaded = Mock()
         mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.return_value = {
+            'left_camera_index': 1,
+            'right_camera_index': 2,
+        }
         mock_run_dual.return_value = {
             'status': 'success',
             'mode': 'dual',
@@ -1775,6 +1919,48 @@ class RealtimeRuntimeApiTests(ErrorPayloadAssertMixin, APITestCase):
 
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         mock_run_dual.assert_called_once()
+
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_returns_capability_error_when_single_not_configured(
+        self,
+        mock_get_app_config,
+        mock_get_camera_registry_service,
+    ):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.side_effect = AppError(
+            message='尚未配置默认单摄像头，实时检测暂不可用。',
+            code='single_camera_not_configured',
+            status_code=400,
+        )
+
+        resp = self.client.post('/api/realtime/detect/current-frame/', {'mode': 'single'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assert_error_payload(resp, code='single_camera_not_configured')
+
+    @patch('fruit_api.views_modules.realtime_runtime_views.get_camera_registry_service')
+    @patch('fruit_api.views_modules.realtime_runtime_views.apps.get_app_config')
+    def test_realtime_detect_current_frame_returns_capability_error_when_dual_requires_two_devices(
+        self,
+        mock_get_app_config,
+        mock_get_camera_registry_service,
+    ):
+        mock_app_cfg = Mock()
+        mock_app_cfg.ensure_models_loaded = Mock()
+        mock_get_app_config.return_value = mock_app_cfg
+        mock_get_camera_registry_service.return_value.validate_realtime_mode.side_effect = AppError(
+            message='双目摄像头测果径需要 2 台摄像头，当前测量果径暂不可用。',
+            code='dual_camera_requires_two_devices',
+            status_code=400,
+        )
+
+        resp = self.client.post('/api/realtime/detect/current-frame/', {'mode': 'dual'}, format='json')
+
+        self.assertEqual(resp.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assert_error_payload(resp, code='dual_camera_requires_two_devices')
 
 
 class ConsoleApiTests(APITestCase):

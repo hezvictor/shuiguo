@@ -1,4 +1,4 @@
-import re
+﻿import re
 
 from django.conf import settings
 from rest_framework import serializers
@@ -167,7 +167,7 @@ class ImageDetectionTaskCreateSerializer(serializers.Serializer):
         mixed_inputs = request.FILES.getlist("mixed_inputs")
 
         if not single_inputs and not diameter_inputs and not mixed_inputs:
-            raise serializers.ValidationError("请至少上传单图片输入、果径图片输入或混合输入。")
+            raise serializers.ValidationError("请至少上传单图输入、果径图片输入或混合输入。")
 
         if attrs.get("detect_ripeness"):
             attrs["detect_classification"] = True
@@ -257,9 +257,9 @@ class StereoCalibrationRunSerializer(serializers.Serializer):
 
 
 class CameraRegistrySelectionSerializer(serializers.Serializer):
-    single_camera_index = serializers.IntegerField(required=False, min_value=0)
-    dual_left_camera_index = serializers.IntegerField(required=False, min_value=0)
-    dual_right_camera_index = serializers.IntegerField(required=False, min_value=0)
+    single_camera_index = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    dual_left_camera_index = serializers.IntegerField(required=False, allow_null=True, min_value=0)
+    dual_right_camera_index = serializers.IntegerField(required=False, allow_null=True, min_value=0)
     preview_camera_indices = serializers.ListField(
         child=serializers.IntegerField(min_value=0),
         required=False,
@@ -270,10 +270,11 @@ class CameraRegistrySelectionSerializer(serializers.Serializer):
     def validate(self, attrs):
         left_index = attrs.get("dual_left_camera_index")
         right_index = attrs.get("dual_right_camera_index")
+        if (left_index is None) ^ (right_index is None):
+            raise serializers.ValidationError("dual_left_camera_index 和 dual_right_camera_index 需要同时为空或同时填写。")
         if left_index is not None and right_index is not None and left_index == right_index:
             raise serializers.ValidationError("dual_left_camera_index 和 dual_right_camera_index 不能相同。")
         return attrs
-
 
 class CameraCaptureSerializer(serializers.Serializer):
     camera_indices = serializers.ListField(
@@ -327,7 +328,7 @@ class RealtimeCurrentFrameDetectSerializer(serializers.Serializer):
         if mode == "single":
             attrs["detect_diameter"] = False
             if not attrs.get("detect_classification"):
-                raise serializers.ValidationError("单摄实时检测至少需要开启种类识别。")
+                raise serializers.ValidationError("单摄实时检测至少需要开启水果种类检测。")
         if mode == "dual":
             attrs["detect_diameter"] = True
             left_index = attrs.get("left_camera_index")
@@ -337,7 +338,7 @@ class RealtimeCurrentFrameDetectSerializer(serializers.Serializer):
         if mode == "hybrid":
             attrs["detect_diameter"] = True
             if not attrs.get("detect_classification"):
-                raise serializers.ValidationError("混合模式至少需要开启种类识别。")
+                raise serializers.ValidationError("混合模式至少需要开启水果种类检测。")
             left_index = attrs.get("left_camera_index")
             right_index = attrs.get("right_camera_index")
             if left_index is not None and right_index is not None and left_index == right_index:
@@ -407,3 +408,14 @@ class MeasureDistanceSerializer(serializers.Serializer):
 
         attrs["measure_all_targets"] = True
         return attrs
+
+        if has_bbox:
+            return attrs
+
+        if has_target_mode:
+            return attrs
+
+        attrs["measure_all_targets"] = True
+        return attrs
+
+
