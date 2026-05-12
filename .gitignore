@@ -34,6 +34,8 @@ media/diameter_tmp/
 media/tmp/
 test_media/
 .yolo/
+test_db.sqlite3
+*.sqlite3
 
 # ------------------------------
 # Build / logs / temp
@@ -45,6 +47,9 @@ tmp/
 temp/
 *.tmp
 *.bak
+runserver_stdout.log
+runserver_stderr.log
+artifacts/
 
 # ------------------------------
 # IDE / OS
@@ -80,6 +85,13 @@ public/fonts/
 *.ckpt
 *.safetensors
 *.npz
+
+# Archive outputs / delivery bundles
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.rar
 
 # ------------------------------
 # Generated project reports/docs (optional working docs)

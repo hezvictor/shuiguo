@@ -1,0 +1,17 @@
+[Unit]
+Description=Shuiguo Daphne Service
+After=network.target mysql.service
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/opt/shuiguo
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/bin/bash -lc 'source /opt/miniconda3/etc/profile.d/conda.sh && conda activate shuiguo && daphne -b 127.0.0.1 -p 8000 shuiguo.asgi:application'
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

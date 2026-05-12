@@ -43,6 +43,14 @@ def env_list(name: str, default: list[str] | None = None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def env_path(name: str, default: Path | str) -> Path:
+    raw_value = os.environ.get(name)
+    candidate = Path(raw_value) if raw_value else Path(default)
+    if not candidate.is_absolute():
+        candidate = BASE_DIR / candidate
+    return candidate.resolve()
+
+
 IS_TESTING = len(sys.argv) > 1 and sys.argv[1] == "test"
 DEBUG = env_bool("DEBUG", default=False)
 
@@ -60,9 +68,7 @@ if IS_TESTING:
     default_allowed_hosts.append("testserver")
 
 ALLOWED_HOSTS = list(dict.fromkeys(env_list("ALLOWED_HOSTS", default_allowed_hosts)))
-FRONTEND_DIST_DIR = Path(
-    os.environ.get("FRONTEND_DIST_DIR", str(BASE_DIR / "frontend_dist"))
-).resolve()
+FRONTEND_DIST_DIR = env_path("FRONTEND_DIST_DIR", "frontend_dist")
 
 INSTALLED_APPS = [
     "django.contrib.admin",
@@ -140,8 +146,9 @@ STATIC_URL = "/static/"
 STATICFILES_DIRS = [
     BASE_DIR / "public",
 ]
+STATIC_ROOT = env_path("STATIC_ROOT", "staticfiles")
 MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+MEDIA_ROOT = env_path("MEDIA_ROOT", "media")
 
 # Model files and inference configuration
 MODEL_CONFIG = {
@@ -194,9 +201,16 @@ CAMERA_CONFIG = {
     "backend": os.environ.get("STEREO_CAMERA_BACKEND", ""),
 }
 
-CSRF_TRUSTED_ORIGINS = [
-    os.environ.get("FRONTEND_ORIGIN", "http://localhost:5173"),
-]
+default_csrf_trusted_origins: list[str] = []
+frontend_origin = os.environ.get("FRONTEND_ORIGIN", "").strip()
+if frontend_origin:
+    default_csrf_trusted_origins.append(frontend_origin)
+CSRF_TRUSTED_ORIGINS = env_list("CSRF_TRUSTED_ORIGINS", default_csrf_trusted_origins)
+USE_X_FORWARDED_HOST = env_bool("USE_X_FORWARDED_HOST", default=False)
+if env_bool("USE_X_FORWARDED_PROTO", default=False):
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+SESSION_COOKIE_SECURE = env_bool("SESSION_COOKIE_SECURE", default=False)
+CSRF_COOKIE_SECURE = env_bool("CSRF_COOKIE_SECURE", default=False)
 
 # Channel layer: InMemory in dev, Redis in production
 REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
