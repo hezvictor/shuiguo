@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
+import psutil
 import torch
 import torch.nn as nn
 from django.conf import settings
@@ -34,6 +35,70 @@ class MeasureConfig:
     allow_cpu_fallback: bool = True
 
 
+class MeasurementEnvironmentError(RuntimeError):
+    pass
+
+
+def _resolve_measure_device(preferred_device: str) -> str:
+    choice = (preferred_device or "auto").strip().lower()
+    if choice == "cpu":
+        return "cpu"
+    if choice == "cuda":
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    return "cuda" if torch.cuda.is_available() else "cpu"
+
+
+def _bytes_to_gib(value: int | float) -> float:
+    return round(float(value) / (1024 ** 3), 2)
+
+
+def get_diameter_runtime_host_status(config: MeasureConfig) -> Dict[str, Any]:
+    preferred_device = str(config.preferred_device or "auto")
+    resolved_device = _resolve_measure_device(preferred_device)
+    virtual_memory = psutil.virtual_memory()
+    swap_memory = psutil.swap_memory()
+    min_cpu_total_memory_gb = float(getattr(settings, "MEASURE_CONFIG", {}).get("MIN_CPU_TOTAL_MEMORY_GB", 8))
+    min_cpu_available_memory_gb = float(getattr(settings, "MEASURE_CONFIG", {}).get("MIN_CPU_AVAILABLE_MEMORY_GB", 2))
+
+    status = {
+        "preferred_device": preferred_device,
+        "resolved_device": resolved_device,
+        "cuda_available": bool(torch.cuda.is_available()),
+        "device_count": int(torch.cuda.device_count()),
+        "total_memory_gb": _bytes_to_gib(virtual_memory.total),
+        "available_memory_gb": _bytes_to_gib(virtual_memory.available),
+        "swap_total_gb": _bytes_to_gib(swap_memory.total),
+        "swap_free_gb": _bytes_to_gib(swap_memory.free),
+        "min_cpu_total_memory_gb": min_cpu_total_memory_gb,
+        "min_cpu_available_memory_gb": min_cpu_available_memory_gb,
+        "supported": True,
+        "reason": None,
+    }
+
+    if resolved_device == "cpu":
+        if status["total_memory_gb"] < min_cpu_total_memory_gb:
+            status["supported"] = False
+            status["reason"] = (
+                "diameter runtime disabled on cpu-only host: "
+                f"total memory {status['total_memory_gb']} GiB is below required {min_cpu_total_memory_gb} GiB"
+            )
+        elif status["available_memory_gb"] < min_cpu_available_memory_gb:
+            status["supported"] = False
+            status["reason"] = (
+                "diameter runtime disabled on cpu-only host: "
+                f"available memory {status['available_memory_gb']} GiB is below required {min_cpu_available_memory_gb} GiB"
+            )
+
+    return status
+
+
+def ensure_diameter_runtime_supported(config: MeasureConfig) -> Dict[str, Any]:
+    status = get_diameter_runtime_host_status(config)
+    if not status["supported"]:
+        raise MeasurementEnvironmentError(status["reason"] or "diameter runtime is unsupported on this host")
+    return status
+
+
 class MonsterRuntime:
     def __init__(self, runtime_dir: Path, restore_ckpt: Path, preferred_device: str = "auto"):
         self.runtime_dir = runtime_dir
@@ -46,12 +111,7 @@ class MonsterRuntime:
 
     @staticmethod
     def _resolve_device(preferred_device: str) -> torch.device:
-        choice = (preferred_device or "auto").strip().lower()
-        if choice == "cpu":
-            return torch.device("cpu")
-        if choice == "cuda":
-            return torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        return torch.device(_resolve_measure_device(preferred_device))
 
     @staticmethod
     def is_cuda_oom(exc: Exception) -> bool:
@@ -1066,4 +1126,5 @@ def build_measure_service() -> FruitDiameterService:
     for path in (config.monster_dir, config.calib_npz, config.restore_ckpt):
         if not path.exists():
             raise FileNotFoundError(f"missing measurement dependency: {path}")
+    ensure_diameter_runtime_supported(config)
     return FruitDiameterService(config)

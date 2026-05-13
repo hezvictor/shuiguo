@@ -6,7 +6,12 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from django.conf import settings
-from fruit_api.diameter_service import build_measure_service
+from fruit_api.diameter_service import (
+    MeasureConfig,
+    MeasurementEnvironmentError,
+    build_measure_service,
+    get_diameter_runtime_host_status,
+)
 from fruit_api.models import DetectionHistory
 from fruit_api.services.history_normalization_service import build_diameter_history_detail, normalize_diameter_statistics
 
@@ -67,6 +72,21 @@ def _drop_diameter_service() -> None:
 
 def _measure_config() -> Dict[str, Any]:
     return getattr(settings, "MEASURE_CONFIG", {}) or {}
+
+
+def _build_measure_config() -> MeasureConfig:
+    config = _measure_config()
+    return MeasureConfig(
+        monster_dir=Path(config["MONSTER_DIR"]),
+        calib_npz=Path(config["CALIB_NPZ"]),
+        restore_ckpt=Path(config["RESTORE_CKPT"]),
+        output_dir=Path(config.get("OUTPUT_DIR", Path(settings.MEDIA_ROOT) / "diameter_tmp")),
+        patch_size=int(config.get("PATCH_SIZE", 5)),
+        default_conf=float(config.get("YOLO_CONF", 0.25)),
+        infer_valid_iters=int(config.get("INFER_VALID_ITERS", 16)),
+        preferred_device=str(config.get("DEVICE", "auto")),
+        allow_cpu_fallback=bool(config.get("ALLOW_CPU_FALLBACK", True)),
+    )
 
 
 def _diameter_call_timeout_seconds() -> int:
@@ -141,6 +161,8 @@ def run_diameter_inference(**kwargs) -> Dict:
         payload = _invoke_diameter_operation("run_inference", **kwargs)
     except FileNotFoundError as exc:
         raise DiameterDependencyError(str(exc)) from exc
+    except MeasurementEnvironmentError as exc:
+        raise DiameterDependencyError(str(exc)) from exc
     except ValueError as exc:
         raise DiameterParamError(str(exc)) from exc
     except DiameterExecutionError:
@@ -154,6 +176,8 @@ def run_diameter_distance(**kwargs) -> Dict:
     try:
         payload = _invoke_diameter_operation("measure_distance", **kwargs)
     except FileNotFoundError as exc:
+        raise DiameterDependencyError(str(exc)) from exc
+    except MeasurementEnvironmentError as exc:
         raise DiameterDependencyError(str(exc)) from exc
     except ValueError as exc:
         raise DiameterParamError(str(exc)) from exc
@@ -169,6 +193,8 @@ def run_diameter_full_measurement(**kwargs) -> Dict:
     try:
         payload = _invoke_diameter_operation("run_full_measurement", **kwargs)
     except FileNotFoundError as exc:
+        raise DiameterDependencyError(str(exc)) from exc
+    except MeasurementEnvironmentError as exc:
         raise DiameterDependencyError(str(exc)) from exc
     except ValueError as exc:
         raise DiameterParamError(str(exc)) from exc
@@ -190,7 +216,22 @@ def get_measure_runtime_status() -> Dict:
             "cooldown_remaining_seconds": max(0, int(math.ceil(_diameter_disabled_until - time.time()))),
         }
 
+    host_runtime = get_diameter_runtime_host_status(_build_measure_config())
+    if not host_runtime.get("supported", True):
+        return {
+            "available": False,
+            "status": "disabled",
+            **host_runtime,
+        }
+
     payload = dict(get_diameter_service().runtime.status())
+    payload.update(
+        {
+            "available": True,
+            "status": "ready" if payload.get("model_loaded") else "idle",
+            "host_runtime": host_runtime,
+        }
+    )
     checkpoint_path = payload.pop("checkpoint_path", None)
     if checkpoint_path:
         payload["checkpoint_file"] = Path(checkpoint_path).name

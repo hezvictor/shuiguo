@@ -961,6 +961,37 @@ class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
         finally:
             reset_diameter_service()
 
+    @patch('fruit_api.services.detection.diameter_app_service.get_diameter_service')
+    @patch('fruit_api.services.detection.diameter_app_service.get_diameter_runtime_host_status')
+    def test_get_measure_runtime_status_reports_disabled_when_host_cannot_support_runtime(
+        self,
+        mock_get_host_status,
+        mock_get_diameter_service,
+    ):
+        from fruit_api.services.detection.diameter_app_service import get_measure_runtime_status
+
+        mock_get_host_status.return_value = {
+            'preferred_device': 'auto',
+            'resolved_device': 'cpu',
+            'cuda_available': False,
+            'device_count': 0,
+            'total_memory_gb': 3.6,
+            'available_memory_gb': 2.8,
+            'swap_total_gb': 0.0,
+            'swap_free_gb': 0.0,
+            'min_cpu_total_memory_gb': 8.0,
+            'min_cpu_available_memory_gb': 2.0,
+            'supported': False,
+            'reason': 'diameter runtime disabled on cpu-only host: total memory 3.6 GiB is below required 8.0 GiB',
+        }
+
+        payload = get_measure_runtime_status()
+
+        self.assertFalse(payload['available'])
+        self.assertEqual(payload['status'], 'disabled')
+        self.assertIn('cpu-only host', payload['reason'])
+        mock_get_diameter_service.assert_not_called()
+
     def test_measure_infer_missing_right_image(self):
         resp = self.client.post(
             '/api/measure/infer/',
