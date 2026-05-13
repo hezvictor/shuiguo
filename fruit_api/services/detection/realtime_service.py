@@ -49,6 +49,8 @@ def build_realtime_summary(data: Dict) -> Dict:
         "statistics",
         "camera_profile",
         "runtime_device",
+        "runtime_warning",
+        "warnings",
     ]:
         if key in data:
             summary[key] = data.get(key)

@@ -89,6 +89,10 @@ def _diameter_text(diameter: Dict[str, Any] | None) -> str | None:
     return None
 
 
+def _diameter_warning(exc: Exception) -> str:
+    return f"果径检测暂不可用，已跳过果径测量: {exc}"
+
+
 def _diameter_axes(diameter: Dict[str, Any] | None) -> List[tuple[str, Dict[str, Any]]]:
     normalized = normalize_diameter_payload(diameter)
     if not normalized:
@@ -116,6 +120,26 @@ def _build_detection_diameter(measured: Dict[str, Any] | None) -> Dict[str, Any]
             "diameter_axes": measured.get("diameter_axes"),
         }
     )
+
+
+def _build_diameter_only_target(
+    detection: Dict[str, Any],
+    *,
+    diameter: Dict[str, Any] | None,
+    measurement_warning: str | None = None,
+) -> Dict[str, Any]:
+    target = {
+        "bbox": detection.get("bbox"),
+        "label": detection.get("label"),
+        "confidence": detection.get("confidence"),
+        "classification": None,
+        "ripeness": None,
+        "diameter": diameter,
+        "source_mode": "dual",
+    }
+    if measurement_warning:
+        target["measurement_warning"] = measurement_warning
+    return target
 
 
 def _append_diameter_values(diameter: Dict[str, Any] | None, horizontal_values: List[float], vertical_values: List[float]) -> None:
@@ -252,36 +276,35 @@ def _process_diameter_group(
 
     left_image = _image_from_bytes(item["left_content"])
     detections = yolo_targets(left_image, app_config)
-
-    inference_payload = get_diameter_service().run_inference(
-        yolo_model=app_config.yolo_model,
-        left_file=SimpleImageWrapper(_bgr_from_bytes(item["left_content"]), item["left_name"]),
-        right_file=SimpleImageWrapper(_bgr_from_bytes(item["right_content"]), item["right_name"]),
-        save_color=True,
-        detect_conf=0.25,
-    )
+    inference_payload = None
+    measurement_warning = None
+    try:
+        inference_payload = get_diameter_service().run_inference(
+            yolo_model=app_config.yolo_model,
+            left_file=SimpleImageWrapper(_bgr_from_bytes(item["left_content"]), item["left_name"]),
+            right_file=SimpleImageWrapper(_bgr_from_bytes(item["right_content"]), item["right_name"]),
+            save_color=True,
+            detect_conf=0.25,
+        )
+    except Exception as exc:
+        measurement_warning = _diameter_warning(exc)
 
     targets = []
     horizontal_diameters: List[float] = []
     vertical_diameters: List[float] = []
     for detection in detections:
-        measured = _measure_bbox_with_inference(
-            inference_id=inference_payload["inference_id"],
-            bbox=detection["bbox"],
-        )
+        measured = None
+        if inference_payload is not None:
+            try:
+                measured = _measure_bbox_with_inference(
+                    inference_id=inference_payload["inference_id"],
+                    bbox=detection["bbox"],
+                )
+            except Exception as exc:
+                measurement_warning = measurement_warning or _diameter_warning(exc)
         diameter = _build_detection_diameter(measured)
         _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
-        targets.append(
-            {
-                "bbox": detection.get("bbox"),
-                "label": detection.get("label"),
-                "confidence": detection.get("confidence"),
-                "classification": None,
-                "ripeness": None,
-                "diameter": diameter,
-                "source_mode": "dual",
-            }
-        )
+        targets.append(_build_diameter_only_target(detection, diameter=diameter, measurement_warning=measurement_warning if diameter is None else None))
 
     annotated_rel = _save_pil(
         task_root / "diameter_outputs" / f"{item['label']}_annotated.jpg",
@@ -301,6 +324,7 @@ def _process_diameter_group(
             "input_source": item.get("input_source"),
             "targets": targets,
             "statistics": _diameter_axis_stats(horizontal_diameters, vertical_diameters),
+            "measurement_warning": measurement_warning,
         },
         {},
         {},
@@ -324,34 +348,44 @@ def _process_mixed_group(
 
     left_image = _image_from_bytes(item["left_content"])
     detections = yolo_targets(left_image, app_config)
-
-    inference_payload = get_diameter_service().run_inference(
-        yolo_model=app_config.yolo_model,
-        left_file=SimpleImageWrapper(_bgr_from_bytes(item["left_content"]), item["left_name"]),
-        right_file=SimpleImageWrapper(_bgr_from_bytes(item["right_content"]), item["right_name"]),
-        save_color=True,
-        detect_conf=0.25,
-    )
+    inference_payload = None
+    measurement_warning = None
+    try:
+        inference_payload = get_diameter_service().run_inference(
+            yolo_model=app_config.yolo_model,
+            left_file=SimpleImageWrapper(_bgr_from_bytes(item["left_content"]), item["left_name"]),
+            right_file=SimpleImageWrapper(_bgr_from_bytes(item["right_content"]), item["right_name"]),
+            save_color=True,
+            detect_conf=0.25,
+        )
+    except Exception as exc:
+        measurement_warning = _diameter_warning(exc)
 
     horizontal_diameters: List[float] = []
     vertical_diameters: List[float] = []
     targets = []
 
     for detection in detections:
-        measured = _measure_bbox_with_inference(inference_id=inference_payload["inference_id"], bbox=detection["bbox"])
+        measured = None
+        if inference_payload is not None:
+            try:
+                measured = _measure_bbox_with_inference(inference_id=inference_payload["inference_id"], bbox=detection["bbox"])
+            except Exception as exc:
+                measurement_warning = measurement_warning or _diameter_warning(exc)
         diameter = _build_detection_diameter(measured)
         _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
 
-        targets.append(
-            build_detection_target(
-                left_image,
-                detection,
-                app_config,
-                detect_ripeness=detect_ripeness,
-                source_mode="hybrid",
-                diameter=diameter,
-            )
+        target = build_detection_target(
+            left_image,
+            detection,
+            app_config,
+            detect_ripeness=detect_ripeness,
+            source_mode="hybrid",
+            diameter=diameter,
         )
+        if measurement_warning and diameter is None:
+            target["measurement_warning"] = measurement_warning
+        targets.append(target)
     counts = summarize_targets(targets)
 
     annotated_rel = _save_pil(
@@ -372,6 +406,7 @@ def _process_mixed_group(
             "input_source": item.get("input_source"),
             "targets": targets,
             "statistics": _diameter_axis_stats(horizontal_diameters, vertical_diameters),
+            "measurement_warning": measurement_warning,
         },
         counts["fruit_counts"],
         counts["ripeness_counts"],
@@ -580,6 +615,9 @@ def execute_image_detection_batch(
             "current_item_label": "",
         },
     }
+    warnings = [item.get("measurement_warning") for item in items if item.get("measurement_warning")]
+    if warnings:
+        summary["warnings"] = warnings
     detail_data = {
         "task_root": _relative_media_path(task_root),
         "items": items,

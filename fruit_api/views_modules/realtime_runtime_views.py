@@ -40,38 +40,41 @@ def realtime_detect_current_frame(request):
     except AppError as exc:
         return error_response(exc, http_status=exc.status_code)
 
-    if mode == "single":
-        if data.get("frame_data_url"):
-            payload = run_single_preview_frame_realtime_detection(
+    try:
+        if mode == "single":
+            if data.get("frame_data_url"):
+                payload = run_single_preview_frame_realtime_detection(
+                    app_config=app_config,
+                    frame_data_url=data["frame_data_url"],
+                    camera_index=data.get("camera_index"),
+                    detect_ripeness=data.get("detect_ripeness", False),
+                )
+            else:
+                payload = run_single_camera_realtime_detection(
+                    app_config=app_config,
+                    camera_index=data.get("camera_index"),
+                    detect_ripeness=data.get("detect_ripeness", False),
+                    backend=data.get("backend"),
+                )
+        elif mode == "dual":
+            payload = run_dual_camera_realtime_detection(
                 app_config=app_config,
-                frame_data_url=data["frame_data_url"],
-                camera_index=data.get("camera_index"),
-                detect_ripeness=data.get("detect_ripeness", False),
-            )
-        else:
-            payload = run_single_camera_realtime_detection(
-                app_config=app_config,
-                camera_index=data.get("camera_index"),
+                left_camera_index=data.get("left_camera_index"),
+                right_camera_index=data.get("right_camera_index"),
+                detect_classification=data.get("detect_classification", False),
                 detect_ripeness=data.get("detect_ripeness", False),
                 backend=data.get("backend"),
             )
-    elif mode == "dual":
-        payload = run_dual_camera_realtime_detection(
-            app_config=app_config,
-            left_camera_index=data.get("left_camera_index"),
-            right_camera_index=data.get("right_camera_index"),
-            detect_classification=data.get("detect_classification", False),
-            detect_ripeness=data.get("detect_ripeness", False),
-            backend=data.get("backend"),
-        )
-    else:
-        payload = run_hybrid_camera_realtime_detection(
-            app_config=app_config,
-            left_camera_index=data.get("left_camera_index"),
-            right_camera_index=data.get("right_camera_index"),
-            detect_ripeness=data.get("detect_ripeness", False),
-            backend=data.get("backend"),
-        )
+        else:
+            payload = run_hybrid_camera_realtime_detection(
+                app_config=app_config,
+                left_camera_index=data.get("left_camera_index"),
+                right_camera_index=data.get("right_camera_index"),
+                detect_ripeness=data.get("detect_ripeness", False),
+                backend=data.get("backend"),
+            )
+    except Exception as exc:
+        return error_response(f"实时检测失败: {exc}", http_status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     sample_payload = payload.pop("_session_sample", None)
     if data.get("collect_sample") and sample_payload is not None:

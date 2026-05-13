@@ -122,6 +122,10 @@ def _diameter_text(diameter: Dict[str, Any] | None) -> str | None:
     return None
 
 
+def _diameter_warning(exc: Exception) -> str:
+    return f"果径检测暂不可用，已降级为无果径结果: {exc}"
+
+
 def _diameter_axes(diameter: Dict[str, Any] | None) -> List[tuple[str, Dict[str, Any]]]:
     normalized = normalize_diameter_payload(diameter)
     if not normalized:
@@ -149,6 +153,21 @@ def _build_detection_diameter(measured: Dict[str, Any] | None) -> Dict[str, Any]
             "diameter_axes": measured.get("diameter_axes"),
         }
     )
+
+
+def _dual_target_without_diameter(detection: Dict[str, Any], *, measurement_warning: str | None = None) -> Dict[str, Any]:
+    target = {
+        "bbox": detection.get("bbox"),
+        "label": detection.get("label"),
+        "confidence": detection.get("confidence"),
+        "classification": None,
+        "ripeness": None,
+        "diameter": None,
+        "source_mode": "dual",
+    }
+    if measurement_warning:
+        target["measurement_warning"] = measurement_warning
+    return target
 
 
 def _append_diameter_values(diameter: Dict[str, Any] | None, horizontal_values: List[float], vertical_values: List[float]) -> None:
@@ -305,6 +324,7 @@ def _result_item(*, mode: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         "annotated_image": payload.get("annotated_image"),
         "targets": payload.get("targets") or [],
         "statistics": summary.get("diameter_statistics") or summary.get("statistics"),
+        "runtime_warning": payload.get("runtime_warning"),
     }
 
 
@@ -385,70 +405,110 @@ def _run_dual_realtime_detection_from_frames(
     mode: str = "dual",
 ) -> Dict[str, Any]:
     left_image = _bgr_to_pil(left_frame)
+    detections = yolo_targets(left_image, app_config)
 
     if not detect_classification and mode == "dual":
-        payload = get_diameter_service().run_full_measurement(
+        try:
+            payload = get_diameter_service().run_full_measurement(
+                yolo_model=app_config.yolo_model,
+                left_file=SimpleImageWrapper(left_frame, "realtime_left.png"),
+                right_file=SimpleImageWrapper(right_frame, "realtime_right.png"),
+                save_vis=True,
+                conf=0.25,
+            )
+            targets = []
+            horizontal_diameters: List[float] = []
+            vertical_diameters: List[float] = []
+            for item in payload.get("targets") or []:
+                diameter = _build_detection_diameter(item)
+                _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
+                targets.append(
+                    {
+                        "bbox": item.get("bbox"),
+                        "label": item.get("label"),
+                        "confidence": item.get("confidence"),
+                        "classification": None,
+                        "ripeness": None,
+                        "diameter": diameter,
+                        "source_mode": "dual",
+                    }
+                )
+            stats = _diameter_axis_stats(horizontal_diameters, vertical_diameters)
+            annotated_image = payload.get("visualization_file")
+            return {
+                "status": "success",
+                "mode": "dual",
+                "targets": targets,
+                "summary": {
+                    "total_targets": len(targets),
+                    "valid_measurements": sum(1 for target in targets if _has_valid_diameter(target.get("diameter"))),
+                    "valid_measurements_by_axis": {
+                        "horizontal": len(horizontal_diameters),
+                        "vertical": len(vertical_diameters),
+                    },
+                    "measurement_axes": ["horizontal", "vertical"],
+                    "fruit_counts": {},
+                    "ripeness_counts": {},
+                    "statistics": stats,
+                    "diameter_statistics": stats,
+                },
+                "annotated_image": annotated_image,
+                "annotated_image_url": _media_url(annotated_image) if annotated_image else None,
+                "suggested_interval_ms": _suggested_interval_ms("dual"),
+                "items": [],
+                "_session_sample": {
+                    "mode": "dual",
+                    "left_bytes": _encode_bgr_to_jpeg_bytes(left_frame),
+                    "right_bytes": _encode_bgr_to_jpeg_bytes(right_frame),
+                },
+                "runtime_warning": payload.get("runtime_warning"),
+            }
+        except Exception as exc:
+            warning = _diameter_warning(exc)
+            targets = [_dual_target_without_diameter(detection, measurement_warning=warning) for detection in detections]
+            annotated_rel = _save_pil_image(_render_annotated(left_image, targets or detections), "dual")
+            empty_stats = _diameter_axis_stats([], [])
+            return {
+                "status": "success",
+                "mode": "dual",
+                "targets": targets,
+                "summary": {
+                    "total_targets": len(targets),
+                    "valid_measurements": 0,
+                    "valid_measurements_by_axis": {
+                        "horizontal": 0,
+                        "vertical": 0,
+                    },
+                    "measurement_axes": ["horizontal", "vertical"],
+                    "fruit_counts": {},
+                    "ripeness_counts": {},
+                    "statistics": empty_stats,
+                    "diameter_statistics": empty_stats,
+                },
+                "annotated_image": annotated_rel,
+                "annotated_image_url": _media_url(annotated_rel),
+                "suggested_interval_ms": _suggested_interval_ms("dual"),
+                "items": [],
+                "_session_sample": {
+                    "mode": "dual",
+                    "left_bytes": _encode_bgr_to_jpeg_bytes(left_frame),
+                    "right_bytes": _encode_bgr_to_jpeg_bytes(right_frame),
+                },
+                "runtime_warning": warning,
+            }
+
+    inference = None
+    measurement_warning = None
+    try:
+        inference = get_diameter_service().run_inference(
             yolo_model=app_config.yolo_model,
             left_file=SimpleImageWrapper(left_frame, "realtime_left.png"),
             right_file=SimpleImageWrapper(right_frame, "realtime_right.png"),
-            save_vis=True,
-            conf=0.25,
+            save_color=True,
+            detect_conf=0.25,
         )
-        targets = []
-        horizontal_diameters: List[float] = []
-        vertical_diameters: List[float] = []
-        for item in payload.get("targets") or []:
-            diameter = _build_detection_diameter(item)
-            _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
-            targets.append(
-                {
-                    "bbox": item.get("bbox"),
-                    "label": item.get("label"),
-                    "confidence": item.get("confidence"),
-                    "classification": None,
-                    "ripeness": None,
-                    "diameter": diameter,
-                    "source_mode": "dual",
-                }
-            )
-        stats = _diameter_axis_stats(horizontal_diameters, vertical_diameters)
-        annotated_image = payload.get("visualization_file")
-        return {
-            "status": "success",
-            "mode": "dual",
-            "targets": targets,
-            "summary": {
-                "total_targets": len(targets),
-                "valid_measurements": sum(1 for target in targets if _has_valid_diameter(target.get("diameter"))),
-                "valid_measurements_by_axis": {
-                    "horizontal": len(horizontal_diameters),
-                    "vertical": len(vertical_diameters),
-                },
-                "measurement_axes": ["horizontal", "vertical"],
-                "fruit_counts": {},
-                "ripeness_counts": {},
-                "statistics": stats,
-                "diameter_statistics": stats,
-            },
-            "annotated_image": annotated_image,
-            "annotated_image_url": _media_url(annotated_image) if annotated_image else None,
-            "suggested_interval_ms": _suggested_interval_ms("dual"),
-            "items": [],
-            "_session_sample": {
-                "mode": "dual",
-                "left_bytes": _encode_bgr_to_jpeg_bytes(left_frame),
-                "right_bytes": _encode_bgr_to_jpeg_bytes(right_frame),
-            },
-        }
-
-    inference = get_diameter_service().run_inference(
-        yolo_model=app_config.yolo_model,
-        left_file=SimpleImageWrapper(left_frame, "realtime_left.png"),
-        right_file=SimpleImageWrapper(right_frame, "realtime_right.png"),
-        save_color=True,
-        detect_conf=0.25,
-    )
-    detections = yolo_targets(left_image, app_config)
+    except Exception as exc:
+        measurement_warning = _diameter_warning(exc)
     classified_targets, fruit_counts, ripeness_counts = _classify_detection_image_targets(
         left_image,
         app_config=app_config,
@@ -459,15 +519,22 @@ def _run_dual_realtime_detection_from_frames(
     vertical_diameters: List[float] = []
     merged_targets = []
     for target in classified_targets:
-        measured = get_diameter_service().measure_distance(
-            inference_id=inference["inference_id"],
-            bbox=target["bbox"],
-            save_annotated=False,
-        )
-        measured_target = (measured.get("targets") or [None])[0]
+        measured_target = None
+        if inference is not None:
+            try:
+                measured = get_diameter_service().measure_distance(
+                    inference_id=inference["inference_id"],
+                    bbox=target["bbox"],
+                    save_annotated=False,
+                )
+                measured_target = (measured.get("targets") or [None])[0]
+            except Exception as exc:
+                measurement_warning = measurement_warning or _diameter_warning(exc)
         diameter = _build_detection_diameter(measured_target)
         _append_diameter_values(diameter, horizontal_diameters, vertical_diameters)
         target["diameter"] = diameter
+        if measurement_warning and diameter is None:
+            target["measurement_warning"] = measurement_warning
         merged_targets.append(target)
 
     stats = _diameter_axis_stats(horizontal_diameters, vertical_diameters)
@@ -493,6 +560,7 @@ def _run_dual_realtime_detection_from_frames(
         "annotated_image_url": _media_url(annotated_rel),
         "suggested_interval_ms": _suggested_interval_ms(mode),
         "items": [],
+        "runtime_warning": measurement_warning,
         "_session_sample": {
             "mode": mode,
             "left_bytes": _encode_bgr_to_jpeg_bytes(left_frame),
