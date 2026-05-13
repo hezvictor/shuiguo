@@ -717,8 +717,11 @@ class ImageDetectionTaskApiTests(APITestCase):
                     'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
                     return_value={'predicted_class': '全熟', 'confidence': 0.74},
                 ), patch(
-                    'fruit_api.services.detection.image_batch_service.get_diameter_service',
-                    return_value=measure_service,
+                    'fruit_api.services.detection.image_batch_service.run_diameter_inference',
+                    return_value=measure_service.run_inference.return_value,
+                ), patch(
+                    'fruit_api.services.detection.image_batch_service.run_diameter_distance',
+                    return_value=measure_service.measure_distance.return_value,
                 ):
                     image_content = self._image_file('tmp.png').read()
                     resp = self.client.post(
@@ -929,6 +932,34 @@ class DiameterApiTests(ErrorPayloadAssertMixin, APITestCase):
             history.detail_data['items'][0]['targets'][0]['diameter']['diameter_axes']['vertical']['distance_mm'],
             48.4,
         )
+
+    @override_settings(
+        MEASURE_CONFIG={
+            **settings.MEASURE_CONFIG,
+            'REQUEST_TIMEOUT_SECONDS': 1,
+            'FAILURE_COOLDOWN_SECONDS': 30,
+        }
+    )
+    @patch('fruit_api.services.detection.diameter_app_service.get_diameter_service')
+    def test_run_measure_inference_times_out_and_enters_cooldown(self, mock_get_diameter_service):
+        from fruit_api.services.detection.diameter_app_service import (
+            DiameterExecutionError,
+            reset_diameter_service,
+            run_measure_inference,
+        )
+
+        mock_get_diameter_service.return_value.run_inference.side_effect = lambda **_kwargs: time.sleep(2)
+        try:
+            with self.assertRaises(DiameterExecutionError) as first_error:
+                run_measure_inference(yolo_model=Mock())
+            self.assertIn('timed out', str(first_error.exception))
+
+            with self.assertRaises(DiameterExecutionError) as second_error:
+                run_measure_inference(yolo_model=Mock())
+            self.assertIn('cooldown', str(second_error.exception))
+            self.assertEqual(mock_get_diameter_service.call_count, 1)
+        finally:
+            reset_diameter_service()
 
     def test_measure_infer_missing_right_image(self):
         resp = self.client.post(
@@ -2466,10 +2497,13 @@ class ServiceUnitTests(SimpleTestCase):
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'Banana', 'confidence': 0.91}],
             ) as mock_yolo_targets, patch(
                 'fruit_api.services.detection.detect_service.classify_ripeness_for_fruit_crop',
-                    return_value={'predicted_class': '生', 'confidence': 0.74},
+                return_value={'predicted_class': '生', 'confidence': 0.74},
             ), patch(
-                'fruit_api.services.detection.image_batch_service.get_diameter_service',
-                return_value=measure_service,
+                'fruit_api.services.detection.image_batch_service.run_diameter_inference',
+                return_value=measure_service.run_inference.return_value,
+            ), patch(
+                'fruit_api.services.detection.image_batch_service.run_diameter_distance',
+                return_value=measure_service.measure_distance.return_value,
             ), patch(
                 'fruit_api.services.detection.image_batch_service.DetectionHistory.objects.create',
                 side_effect=lambda **kwargs: SimpleNamespace(**kwargs),
@@ -2562,8 +2596,11 @@ class ServiceUnitTests(SimpleTestCase):
                 'fruit_api.services.detection.image_batch_service.yolo_targets',
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'fruit', 'confidence': 0.91}],
             ) as mock_yolo_targets, patch(
-                'fruit_api.services.detection.image_batch_service.get_diameter_service',
-                return_value=measure_service,
+                'fruit_api.services.detection.image_batch_service.run_diameter_inference',
+                return_value=measure_service.run_inference.return_value,
+            ), patch(
+                'fruit_api.services.detection.image_batch_service.run_diameter_distance',
+                return_value=measure_service.measure_distance.return_value,
             ), patch(
                 'fruit_api.services.detection.image_batch_service.DetectionHistory.objects.create',
                 side_effect=lambda **kwargs: SimpleNamespace(**kwargs),
@@ -2653,8 +2690,11 @@ class ServiceUnitTests(SimpleTestCase):
 
         try:
             with override_settings(MEDIA_ROOT=media_root), patch(
-                'fruit_api.services.detection.realtime_pipeline_service.get_diameter_service',
-                return_value=measure_service,
+                'fruit_api.services.detection.realtime_pipeline_service.run_diameter_inference',
+                return_value=measure_service.run_inference.return_value,
+            ), patch(
+                'fruit_api.services.detection.realtime_pipeline_service.run_diameter_distance',
+                return_value=measure_service.measure_distance.return_value,
             ), patch(
                 'fruit_api.services.detection.realtime_pipeline_service.yolo_targets',
                 return_value=[{'bbox': [8, 10, 34, 34], 'label': 'Banana', 'confidence': 0.91}],

@@ -19,7 +19,10 @@ from fruit_api.services.detection.detect_service import (
     summarize_targets,
     yolo_targets,
 )
-from fruit_api.services.detection.diameter_app_service import get_diameter_service
+from fruit_api.services.detection.diameter_app_service import (
+    run_diameter_distance,
+    run_diameter_inference,
+)
 from fruit_api.services.history_normalization_service import normalize_diameter_payload
 
 
@@ -202,7 +205,7 @@ def _render_annotated_image(image: Image.Image, detections: List[Dict[str, Any]]
 
 
 def _measure_bbox_with_inference(*, inference_id: str, bbox: List[int]):
-    measure_payload = get_diameter_service().measure_distance(
+    measure_payload = run_diameter_distance(
         inference_id=inference_id,
         bbox=[int(v) for v in bbox],
         save_annotated=False,
@@ -279,7 +282,7 @@ def _process_diameter_group(
     inference_payload = None
     measurement_warning = None
     try:
-        inference_payload = get_diameter_service().run_inference(
+        inference_payload = run_diameter_inference(
             yolo_model=app_config.yolo_model,
             left_file=SimpleImageWrapper(_bgr_from_bytes(item["left_content"]), item["left_name"]),
             right_file=SimpleImageWrapper(_bgr_from_bytes(item["right_content"]), item["right_name"]),
@@ -351,7 +354,7 @@ def _process_mixed_group(
     inference_payload = None
     measurement_warning = None
     try:
-        inference_payload = get_diameter_service().run_inference(
+        inference_payload = run_diameter_inference(
             yolo_model=app_config.yolo_model,
             left_file=SimpleImageWrapper(_bgr_from_bytes(item["left_content"]), item["left_name"]),
             right_file=SimpleImageWrapper(_bgr_from_bytes(item["right_content"]), item["right_name"]),

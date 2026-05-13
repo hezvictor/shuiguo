@@ -1,5 +1,9 @@
+import math
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from django.conf import settings
 from fruit_api.diameter_service import build_measure_service
@@ -20,6 +24,9 @@ class DiameterExecutionError(Exception):
 
 
 _diameter_service = None
+_diameter_service_lock = threading.Lock()
+_diameter_disabled_until = 0.0
+_diameter_disabled_reason: str | None = None
 _PRIVATE_MEASURE_KEYS = {
     "annotated_image_path",
     "calib_path",
@@ -38,17 +45,151 @@ _PRIVATE_MEASURE_KEYS = {
 
 def get_diameter_service():
     global _diameter_service
-    if _diameter_service is None:
-        _diameter_service = build_measure_service()
-    return _diameter_service
+    with _diameter_service_lock:
+        if _diameter_service is None:
+            _diameter_service = build_measure_service()
+        return _diameter_service
 
 
 def reset_diameter_service() -> None:
+    global _diameter_service, _diameter_disabled_until, _diameter_disabled_reason
+    with _diameter_service_lock:
+        _diameter_service = None
+        _diameter_disabled_until = 0.0
+        _diameter_disabled_reason = None
+
+
+def _drop_diameter_service() -> None:
     global _diameter_service
-    _diameter_service = None
+    with _diameter_service_lock:
+        _diameter_service = None
+
+
+def _measure_config() -> Dict[str, Any]:
+    return getattr(settings, "MEASURE_CONFIG", {}) or {}
+
+
+def _diameter_call_timeout_seconds() -> int:
+    config = _measure_config()
+    configured_timeout = config.get("REQUEST_TIMEOUT_SECONDS")
+    if configured_timeout is None:
+        configured_timeout = config.get("INFER_TIMEOUT_SECONDS")
+    if configured_timeout is None:
+        configured_timeout = 20
+    return max(1, int(configured_timeout))
+
+
+def _diameter_failure_cooldown_seconds() -> int:
+    config = _measure_config()
+    configured_cooldown = config.get("FAILURE_COOLDOWN_SECONDS")
+    if configured_cooldown is None:
+        configured_cooldown = 120
+    return max(5, int(configured_cooldown))
+
+
+def _diameter_is_temporarily_disabled() -> tuple[bool, str | None]:
+    global _diameter_disabled_until, _diameter_disabled_reason
+    now = time.time()
+    if _diameter_disabled_until and now < _diameter_disabled_until:
+        remaining = int(math.ceil(_diameter_disabled_until - now))
+        reason = _diameter_disabled_reason or "previous diameter failure"
+        return True, f"{reason} (cooldown {remaining}s remaining)"
+    if _diameter_disabled_until and now >= _diameter_disabled_until:
+        _diameter_disabled_until = 0.0
+        _diameter_disabled_reason = None
+    return False, None
+
+
+def _mark_diameter_unavailable(reason: str) -> None:
+    global _diameter_disabled_until, _diameter_disabled_reason
+    _drop_diameter_service()
+    _diameter_disabled_reason = reason
+    _diameter_disabled_until = time.time() + _diameter_failure_cooldown_seconds()
+
+
+def _invoke_diameter_operation(method_name: str, **kwargs) -> Any:
+    disabled, message = _diameter_is_temporarily_disabled()
+    if disabled:
+        raise DiameterExecutionError(message or "diameter service is temporarily unavailable")
+
+    timeout_seconds = kwargs.pop("_timeout_seconds", _diameter_call_timeout_seconds())
+
+    def _call() -> Any:
+        service = get_diameter_service()
+        method = getattr(service, method_name)
+        return method(**kwargs)
+
+    executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"diameter-{method_name}")
+    future = executor.submit(_call)
+    try:
+        return future.result(timeout=timeout_seconds)
+    except FuturesTimeoutError as exc:
+        reason = f"{method_name} timed out after {timeout_seconds}s"
+        _mark_diameter_unavailable(reason)
+        raise DiameterExecutionError(reason) from exc
+    except Exception as exc:
+        if isinstance(exc, (FileNotFoundError, ValueError)):
+            raise
+        _mark_diameter_unavailable(str(exc) or exc.__class__.__name__)
+        raise
+    finally:
+        executor.shutdown(wait=False, cancel_futures=True)
+
+
+def run_diameter_inference(**kwargs) -> Dict:
+    try:
+        payload = _invoke_diameter_operation("run_inference", **kwargs)
+    except FileNotFoundError as exc:
+        raise DiameterDependencyError(str(exc)) from exc
+    except ValueError as exc:
+        raise DiameterParamError(str(exc)) from exc
+    except DiameterExecutionError:
+        raise
+    except Exception as exc:
+        raise DiameterExecutionError(str(exc)) from exc
+    return _sanitize_measure_payload(payload)
+
+
+def run_diameter_distance(**kwargs) -> Dict:
+    try:
+        payload = _invoke_diameter_operation("measure_distance", **kwargs)
+    except FileNotFoundError as exc:
+        raise DiameterDependencyError(str(exc)) from exc
+    except ValueError as exc:
+        raise DiameterParamError(str(exc)) from exc
+    except DiameterExecutionError:
+        raise
+    except Exception as exc:
+        raise DiameterExecutionError(str(exc)) from exc
+
+    return _normalize_measure_result_payload(payload)
+
+
+def run_diameter_full_measurement(**kwargs) -> Dict:
+    try:
+        payload = _invoke_diameter_operation("run_full_measurement", **kwargs)
+    except FileNotFoundError as exc:
+        raise DiameterDependencyError(str(exc)) from exc
+    except ValueError as exc:
+        raise DiameterParamError(str(exc)) from exc
+    except DiameterExecutionError:
+        raise
+    except Exception as exc:
+        raise DiameterExecutionError(str(exc)) from exc
+
+    return _normalize_measure_result_payload(payload)
 
 
 def get_measure_runtime_status() -> Dict:
+    disabled, message = _diameter_is_temporarily_disabled()
+    if disabled:
+        return {
+            "available": False,
+            "status": "disabled",
+            "reason": message,
+            "cooldown_remaining_seconds": max(0, int(math.ceil(_diameter_disabled_until - time.time()))),
+        }
+
     payload = dict(get_diameter_service().runtime.status())
     checkpoint_path = payload.pop("checkpoint_path", None)
     if checkpoint_path:
@@ -146,28 +287,11 @@ def _build_history_payload(payload: Dict) -> Dict:
 
 
 def run_measure_inference(*, yolo_model, **kwargs) -> Dict:
-    try:
-        payload = get_diameter_service().run_inference(yolo_model=yolo_model, **kwargs)
-    except FileNotFoundError as exc:
-        raise DiameterDependencyError(str(exc)) from exc
-    except ValueError as exc:
-        raise DiameterParamError(str(exc)) from exc
-    except Exception as exc:
-        raise DiameterExecutionError(str(exc)) from exc
-    return _sanitize_measure_payload(payload)
+    return run_diameter_inference(yolo_model=yolo_model, **kwargs)
 
 
 def run_measure_distance(*, user=None, save_history: bool = False, **kwargs) -> Dict:
-    try:
-        payload = get_diameter_service().measure_distance(**kwargs)
-    except FileNotFoundError as exc:
-        raise DiameterDependencyError(str(exc)) from exc
-    except ValueError as exc:
-        raise DiameterParamError(str(exc)) from exc
-    except Exception as exc:
-        raise DiameterExecutionError(str(exc)) from exc
-
-    payload = _normalize_measure_result_payload(payload)
+    payload = run_diameter_distance(**kwargs)
 
     if save_history and user is not None:
         _save_history(user, payload)
@@ -185,24 +309,15 @@ def measure_and_save_history(
     conf: float,
     save_vis: bool,
 ) -> Dict:
-    try:
-        payload = get_diameter_service().run_full_measurement(
-            yolo_model=yolo_model,
-            image_file=image,
-            left_file=left_image,
-            right_file=right_image,
-            split_mode=split_mode,
-            conf=conf,
-            save_vis=save_vis,
-        )
-    except FileNotFoundError as exc:
-        raise DiameterDependencyError(str(exc)) from exc
-    except ValueError as exc:
-        raise DiameterParamError(str(exc)) from exc
-    except Exception as exc:
-        raise DiameterExecutionError(str(exc)) from exc
-
-    payload = _normalize_measure_result_payload(payload)
+    payload = run_diameter_full_measurement(
+        yolo_model=yolo_model,
+        image_file=image,
+        left_file=left_image,
+        right_file=right_image,
+        split_mode=split_mode,
+        conf=conf,
+        save_vis=save_vis,
+    )
 
     _save_history(
         user,

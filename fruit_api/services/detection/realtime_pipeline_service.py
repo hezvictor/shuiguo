@@ -17,7 +17,11 @@ from fruit_api.diameter_service import SimpleImageWrapper
 from fruit_api.services.camera import capture_dual_camera_frames, capture_single_camera_frame, get_cached_preview_frame_snapshot
 from fruit_api.services.camera.registry_service import get_camera_registry_service
 from fruit_api.services.detection.detect_service import build_detection_target, summarize_targets, yolo_targets
-from fruit_api.services.detection.diameter_app_service import get_diameter_service
+from fruit_api.services.detection.diameter_app_service import (
+    run_diameter_distance,
+    run_diameter_full_measurement,
+    run_diameter_inference,
+)
 from fruit_api.services.history_normalization_service import normalize_diameter_payload
 
 
@@ -409,7 +413,7 @@ def _run_dual_realtime_detection_from_frames(
 
     if not detect_classification and mode == "dual":
         try:
-            payload = get_diameter_service().run_full_measurement(
+            payload = run_diameter_full_measurement(
                 yolo_model=app_config.yolo_model,
                 left_file=SimpleImageWrapper(left_frame, "realtime_left.png"),
                 right_file=SimpleImageWrapper(right_frame, "realtime_right.png"),
@@ -500,7 +504,7 @@ def _run_dual_realtime_detection_from_frames(
     inference = None
     measurement_warning = None
     try:
-        inference = get_diameter_service().run_inference(
+        inference = run_diameter_inference(
             yolo_model=app_config.yolo_model,
             left_file=SimpleImageWrapper(left_frame, "realtime_left.png"),
             right_file=SimpleImageWrapper(right_frame, "realtime_right.png"),
@@ -522,7 +526,7 @@ def _run_dual_realtime_detection_from_frames(
         measured_target = None
         if inference is not None:
             try:
-                measured = get_diameter_service().measure_distance(
+                measured = run_diameter_distance(
                     inference_id=inference["inference_id"],
                     bbox=target["bbox"],
                     save_annotated=False,
