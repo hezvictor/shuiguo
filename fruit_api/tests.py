@@ -18,7 +18,7 @@ from channels.testing import WebsocketCommunicator
 from django.conf import settings
 from django.contrib.auth.models import User
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import SimpleTestCase, override_settings
+from django.test import RequestFactory, SimpleTestCase, override_settings
 from PIL import Image
 from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
@@ -118,6 +118,29 @@ class AuthApiTests(APITestCase):
         self.assertEqual(resp.status_code, status.HTTP_200_OK)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password('newpass123'))
+
+
+class FrontendIndexTests(SimpleTestCase):
+    def setUp(self):
+        self.factory = RequestFactory()
+
+    def test_frontend_index_injects_icp_footer(self):
+        from shuiguo.views import frontend_index
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            dist_dir = Path(tmpdir)
+            (dist_dir / 'index.html').write_text(
+                '<!DOCTYPE html><html><body><div id="app"></div></body></html>',
+                encoding='utf-8',
+            )
+            with override_settings(FRONTEND_DIST_DIR=str(dist_dir)):
+                response = frontend_index(self.factory.get('/'))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        content = response.content.decode('utf-8')
+        self.assertIn('桂ICP备2025060160号', content)
+        self.assertIn('https://beian.miit.gov.cn/', content)
+        self.assertIn('site-beian-footer', content)
 
 
 class DetectionHistoryApiTests(APITestCase):
